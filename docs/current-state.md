@@ -4,11 +4,12 @@ Factual snapshot of the project as inspected in the repository.
 Nothing here is a claim about future work; for the plan, see
 [architecture.md](architecture.md) and [roadmap.md](roadmap.md).
 
-Verification note: this snapshot is based on code inspection. The Docker
-build, frame extraction, and vision test were **not re-run** while writing
-these docs (a documentation-only task must not consume API budget or
-reprocess gameplay), so test results below are marked unverified unless a
-prior artifact demonstrates them.
+Verification note: milestone 2 results below were verified by execution
+(see "Latest verified test results"). The Docker build and in-container
+runs were **not** possible in that session (daemon socket permission
+denied, no sudo), so tests ran on the host project venv instead; the
+Docker commands in [testing.md](testing.md) remain the canonical workflow
+and must be re-run where Docker is available.
 
 ## Existing files and responsibilities
 
@@ -18,9 +19,14 @@ prior artifact demonstrates them.
     `frame_<timestamp>.jpg`, printing FPS, frame count, and duration.
   - Vision test (`python main.py --vision-test`): validates
     `output/frames/frame_00000.jpg` (non-empty, decodable image, image MIME
-    type), sends it to the Baseten vision model with an evidence-only
-    prompt, prints the prose description. API key is read from the
-    `BASETEN_API_KEY` environment variable and redacted from error output.
+    type), requests an `observation-v1` JSON observation
+    (see `docs/contracts/observation-v1.md`), strictly parses and validates
+    it (`parse_observation` / `validate_observation`), prints the validated
+    JSON, and saves it to `output/frames/frame_00000.json` (git-ignored).
+    Invalid model output exits non-zero and saves nothing. API key is read
+    from the `BASETEN_API_KEY` environment variable and redacted from error
+    output. Server-side schema enforcement is unavailable for this model,
+    so validation happens in code.
 - `Dockerfile` — `python:3.12-slim`, installs `requirements.txt`, copies
   only `main.py`, creates `/app/output/frames`, creates non-root user
   `appuser` (uid 10001), runs as `appuser`, default command
@@ -79,18 +85,28 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 
 ## Latest verified test results
 
-- None in this task. `output/frames/` contains previously extracted frames
-  (e.g. `frame_00000.jpg`), indicating extraction ran at some point, but
-  this was not re-verified here. Status: **unknown / not run**.
+- Unit suite `tests/test_observation_schema.py`: **21 tests, all passed**
+  (run on the host project venv; Docker daemon was unreachable in this
+  session, so the canonical in-container command in [testing.md](testing.md)
+  still needs a run where Docker is available).
+- Live single-frame vision test: **passed** — HTTP 200, model returned pure
+  JSON conforming to `observation-v1` (4 observations, 4 uncertainties),
+  which validated, printed, and saved to
+  `output/frames/frame_00000.json`. Run on the host venv (Docker
+  unavailable); one request only.
+- Frame extraction was not re-run; `main()` is byte-identical to the
+  previous commit (verified via `git diff`). Docker build not verified in
+  this session (daemon unreachable); re-run `docker compose build` where
+  Docker is available.
 
 ## Not implemented yet
 
-Structured JSON vision output, multi-frame observation tests, rolling
-match-state tracking, event detection, controlled sampling/concurrency,
-commentary generation, TTS/audio playback, live capture, OBS integration.
+Multi-frame observation tests, rolling match-state tracking, event
+detection, controlled sampling/concurrency, commentary generation,
+TTS/audio playback, live capture, OBS integration.
 
 ## Recommended next milestone
 
-Roadmap milestone 2: standardize vision output as validated structured JSON
-for the single test frame — without changing the model ID, networking, or
-extraction behavior. See [roadmap.md](roadmap.md).
+Roadmap milestone 3: run the validated observation step over a small set
+of existing frames and inspect quality/coverage — without changing the
+model ID, networking, or extraction behavior. See [roadmap.md](roadmap.md).

@@ -9,6 +9,9 @@ events → commentary → audio) must have explicit schemas.
 - Prefer strict validation at stage boundaries: reject or flag
   non-conforming data with a clear error rather than guessing.
 
-The vision JSON schema itself is **not** defined here. It belongs to the
-next application milestone (roadmap milestone 2), where it will be added
-under this directory alongside the decision that justifies it.
+Defined contracts:
+
+- [observation-v1.md](observation-v1.md) — one validated vision-model
+  observation of a single frame (roadmap milestone 2). Includes why
+  server-side schema enforcement is unavailable for our model and why
+  validation happens in code.

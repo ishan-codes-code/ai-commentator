@@ -28,9 +28,23 @@ docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
   commentator python main.py --vision-test
 ```
 
-Sends only `output/frames/frame_00000.jpg` to the configured model and
-prints the description. Requires `BASETEN_API_KEY` to be set in your shell
-or `.env` (never echo or commit its value).
+Sends only `output/frames/frame_00000.jpg` to the configured model,
+validates the response against `docs/contracts/observation-v1.md`, prints
+the validated JSON, and saves it to `output/frames/frame_00000.json`
+(git-ignored). Requires `BASETEN_API_KEY` to be set in your shell
+or `.env` (never echo or commit its value). Invalid model output exits
+non-zero with an `Invalid observation:` error and saves nothing.
+
+## Unit tests (deterministic, no API calls)
+
+```sh
+docker compose run --rm -v "$PWD/tests:/app/tests:ro" \
+  commentator python -m unittest discover -s tests -v
+```
+
+Covers `parse_observation` / `validate_observation` with fixtures for valid
+and invalid responses (see `tests/test_observation_schema.py`). Tests mount
+read-only into the container; no image change is needed to run them.
 
 ## Configuration and secret-handling checks
 

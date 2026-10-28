@@ -30,15 +30,19 @@ and eventually OBS audio integration.
   response. Isolate provider-specific API logic (base URL, model ID, request
   shape, error mapping) behind a clear boundary so the provider can change
   without touching pipeline logic.
-- **Status:** implemented but not fully verified (single-frame prose
-  description via Baseten; structured output not yet implemented).
+- **Status:** implemented for the single test frame (structured
+  `observation-v1` JSON via Baseten); multi-frame use not yet implemented
+  or fully verified.
 
 ### 3. Structured observation validation
 
 - **Responsibility:** parse the model response into an explicit schema and
   reject or flag anything that does not conform, before downstream stages
   may use it.
-- **Status:** planned. Contract changes must be reviewed for compatibility
+- **Status:** implemented for the single-frame case
+  (`observation-v1` in [contracts/observation-v1.md](contracts/observation-v1.md),
+  validated by `parse_observation` / `validate_observation`). Contract
+  changes must be reviewed for compatibility
   (see [contracts/README.md](contracts/README.md)).
 
 ### 4. Rolling match context and event tracking

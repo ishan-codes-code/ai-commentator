@@ -1,7 +1,10 @@
 import argparse
 import base64
+import json
+import math
 import mimetypes
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -15,14 +18,133 @@ VISION_FRAME_PATH = OUTPUT_DIR / "frame_00000.jpg"
 INTERVAL = 3
 BASETEN_BASE_URL = "https://inference.baseten.co/v1"
 BASETEN_MODEL = "meta-models/muse-spark-open-1026"
-VISION_PROMPT = (
-    "Describe only the visible evidence in this Free Fire gameplay frame. Cover "
-    "the environment, characters, visible HUD elements, and apparent combat "
-    "activity. Clearly distinguish direct observations from uncertain "
-    "interpretations, labeling interpretations as uncertain. Do not invent "
-    "events, actions, identities, or outcomes that are not visible in this "
-    "single frame. Say when something is unreadable or ambiguous."
-)
+OBSERVATION_SCHEMA_VERSION = "observation-v1"
+OBSERVATION_CATEGORIES = ("environment", "character", "hud", "combat", "other")
+OBSERVATION_CONFIDENCES = ("high", "medium", "low")
+OBSERVATION_OUTPUT_PATH = VISION_FRAME_PATH.with_suffix(".json")
+
+
+class ObservationError(ValueError):
+    """Model output failed observation-v1 parsing or validation."""
+
+
+def vision_frame_timestamp():
+    try:
+        return int(VISION_FRAME_PATH.stem.split("_")[1])
+    except (IndexError, ValueError) as exc:
+        raise RuntimeError(
+            f"Cannot derive timestamp from frame name: {VISION_FRAME_PATH.name}"
+        ) from exc
+
+
+def build_vision_prompt(timestamp):
+    categories = ", ".join(f'"{c}"' for c in OBSERVATION_CATEGORIES)
+    confidences = ", ".join(f'"{c}"' for c in OBSERVATION_CONFIDENCES)
+    return (
+        "Describe only the visible evidence in this Free Fire gameplay frame. "
+        f"This frame is at {timestamp} seconds in the video. "
+        "Cover the environment, characters, visible HUD elements, and apparent "
+        "combat activity. Clearly distinguish direct observations from uncertain "
+        "interpretations. Do not invent events, actions, identities, or outcomes "
+        "that are not visible in this single frame. "
+        "Respond with ONLY a single JSON object, no markdown fences, no commentary, "
+        "matching this shape: "
+        '{"schema_version": "observation-v1", '
+        '"timestamp": <number, the frame timestamp stated above>, '
+        '"observations": [{"category": <one of: ' + categories + ">, "
+        '"description": <non-empty string of what is visible>, '
+        '"confidence": <one of: ' + confidences + ">, "
+        '"evidence": <non-empty string grounding the claim>}], '
+        '"uncertainties": [<strings describing what is unreadable or ambiguous>]}. '
+        "Put anything unreadable or ambiguous in uncertainties; never invent detail."
+    )
+
+
+def parse_observation(text):
+    if not isinstance(text, str) or not text.strip():
+        raise ObservationError("Baseten returned no text content.")
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        match = re.match(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", cleaned, re.DOTALL)
+        if match is None:
+            raise ObservationError("Model output is not a single JSON value.")
+        cleaned = match.group(1).strip()
+        if not cleaned:
+            raise ObservationError("Baseten returned no text content.")
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise ObservationError(f"Model output is not valid JSON: {exc}") from None
+    if not isinstance(data, dict):
+        raise ObservationError("Model output must be a JSON object.")
+    return data
+
+
+def _reject_extra(mapping, allowed, where):
+    extra = sorted(set(mapping) - set(allowed))
+    if extra:
+        raise ObservationError(f"{where} has unsupported fields: {', '.join(extra)}.")
+
+
+def _require_non_empty_string(mapping, field, where):
+    value = mapping.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ObservationError(f"{where} requires a non-empty string field '{field}'.")
+    return value
+
+
+def validate_observation(data):
+    if not isinstance(data, dict):
+        raise ObservationError("Observation must be a JSON object.")
+    _reject_extra(
+        data,
+        ("schema_version", "timestamp", "observations", "uncertainties"),
+        "Observation",
+    )
+    if data.get("schema_version") != OBSERVATION_SCHEMA_VERSION:
+        raise ObservationError(
+            "Observation requires schema_version "
+            f"'{OBSERVATION_SCHEMA_VERSION}'."
+        )
+    if "timestamp" not in data:
+        raise ObservationError("Observation requires field 'timestamp'.")
+    timestamp = data["timestamp"]
+    if (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, (int, float))
+        or (isinstance(timestamp, float) and not math.isfinite(timestamp))
+    ):
+        raise ObservationError("Observation field 'timestamp' must be a number.")
+    if "observations" not in data or not isinstance(data["observations"], list):
+        raise ObservationError("Observation requires field 'observations' as a list.")
+    for index, item in enumerate(data["observations"]):
+        where = f"observations[{index}]"
+        if not isinstance(item, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            item, ("category", "description", "confidence", "evidence"), where
+        )
+        if item.get("category") not in OBSERVATION_CATEGORIES:
+            raise ObservationError(
+                f"{where} has unsupported category "
+                f"'{item.get('category')}'; expected one of: "
+                f"{', '.join(OBSERVATION_CATEGORIES)}."
+            )
+        _require_non_empty_string(item, "description", where)
+        if item.get("confidence") not in OBSERVATION_CONFIDENCES:
+            raise ObservationError(
+                f"{where} has invalid confidence '{item.get('confidence')}'; "
+                f"expected one of: {', '.join(OBSERVATION_CONFIDENCES)}."
+            )
+        _require_non_empty_string(item, "evidence", where)
+    if "uncertainties" not in data or not isinstance(data["uncertainties"], list):
+        raise ObservationError("Observation requires field 'uncertainties' as a list.")
+    for index, entry in enumerate(data["uncertainties"]):
+        if not isinstance(entry, str) or not entry.strip():
+            raise ObservationError(
+                f"uncertainties[{index}] must be a non-empty string."
+            )
+    return data
 
 
 def main():
@@ -112,7 +234,10 @@ def run_vision_test():
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": VISION_PROMPT},
+                        {
+                            "type": "text",
+                            "text": build_vision_prompt(vision_frame_timestamp()),
+                        },
                         {
                             "type": "image_url",
                             "image_url": {"url": image_data_url},
@@ -134,10 +259,16 @@ def run_vision_test():
         raise SystemExit(1) from None
 
     text = response.choices[0].message.content
-    if not isinstance(text, str) or not text.strip():
-        raise RuntimeError("Baseten returned no text content.")
+    try:
+        validated = validate_observation(parse_observation(text))
+    except ObservationError as exc:
+        print(f"Invalid observation: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
 
-    print(text)
+    rendered = json.dumps(validated, indent=2, ensure_ascii=False)
+    print(rendered)
+    OBSERVATION_OUTPUT_PATH.write_text(rendered + "\n", encoding="utf-8")
+    print(f"Saved validated observation: {OBSERVATION_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":
@@ -145,7 +276,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--vision-test",
         action="store_true",
-        help="Send output/frames/frame_00000.jpg to Baseten's vision model.",
+        help="Request a validated structured-JSON observation of "
+        "output/frames/frame_00000.jpg from Baseten's vision model.",
     )
     args = parser.parse_args()
 
