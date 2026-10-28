@@ -1,0 +1,11 @@
+services:
+  commentator:
+    build: .
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      BASETEN_API_KEY: "${BASETEN_API_KEY:-}"
+    volumes:
+      - ./gameplay:/app/gameplay:ro
+      - ./output:/app/output
+    network_mode: bridge
+    restart: "no"
