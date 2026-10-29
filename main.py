@@ -84,6 +84,55 @@ COMMENTARY_GATE_RULES = (
 WRITER_MAX_CLAIMS = 6
 WRITER_MAX_HISTORY_LINES = 4
 WRITER_MAX_EVIDENCE_CHARS = 500
+SCRIPT_DIR = Path("output/script")
+SCRIPT_FILENAME = "script.json"
+SCRIPT_PATH = SCRIPT_DIR / SCRIPT_FILENAME
+SCRIPT_SCHEMA_VERSION = "script-v1"
+SCRIPT_STATUSES = ("success", "silence", "error")
+SCRIPT_MIN_TEXT_CHARS = 8
+SCRIPT_MAX_TEXT_CHARS = 600
+SCRIPT_MAX_CLAIMS = WRITER_MAX_CLAIMS
+SCRIPT_MAX_HISTORY_LINES = WRITER_MAX_HISTORY_LINES
+SCRIPT_UNCERTAINTY_MARKERS = (
+    "unconfirmed",
+    "possible",
+    "possibly",
+    "may have",
+    "might",
+    "could be",
+    "looks like",
+    "appears",
+    "appears to",
+    "suspected",
+    "reported",
+    "signs of",
+)
+SCRIPT_CERTAINTY_MARKERS = ("confirmed", "definitely", "certainly")
+SCRIPT_KILL_STEMS = (
+    "kill", "killed", "killer", "elim", "knock", "knocked",
+    "assist", "damage", "headshot", "downed",
+)
+SCRIPT_OUTCOME_STEMS = (
+    "victor", " winner", " wins", "defeat", " champion",
+    "placement", "first place", "top 1", "takes the match",
+)
+SCRIPT_ACTION_STEMS = (
+    "pushing", "retreat", "healing", "fighting", "camping",
+    "rotating", "rotation", " aiming", "flanking", "third-part",
+)
+SCRIPT_ZONE_STEMS = ("safe zone", "safe-zone", "map control", "circle is")
+SCRIPT_CAUSAL_MARKERS = (
+    "because", "therefore", "as a result", "led to", "caused by",
+    "thanks to",
+)
+SCRIPT_INTENT_MARKERS = (
+    "trying to", "planning to", "intends to", "wants to",
+)
+SCRIPT_WORD_NUMBERS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10,
+}
 DEFAULT_VISION_BATCH_LIMIT = 5
 DEFAULT_VISION_BATCH_JOBS = 1
 MAX_VISION_BATCH_JOBS = 4
@@ -3026,6 +3075,728 @@ def run_generate_commentary(
     return 0
 
 
+def script_segment_id(index: int) -> str:
+    """Segment id in emission order (chronological): segment-001, ..."""
+    return f"segment-{index + 1:03d}"
+
+
+def build_script_prompt(claims: list, history_texts: list) -> str:
+    """Build the bounded prompt for the final-script model call.
+
+    The model sees only evidence-gated claims plus recent spoken lines.
+    It never sees raw frames, raw observations, or full match history,
+    and it must return JSON mapping source claim ids to spoken segments.
+    """
+    parts = [
+        "You are a skilled live esports commentator covering Free Fire. ",
+        "Write broadcast-ready spoken lines, one segment per moment below. ",
+        "Use concise, energetic sentences that are comfortable to speak aloud. ",
+        "Prefer active voice and natural contractions. Vary sentence openings ",
+        "and transitions. Keep it exciting without melodrama. ",
+        "Prioritize confirmed eliminations and major combat developments, ",
+        "then significant status changes, then match-state developments, ",
+        "then continuity. Skip visually obvious but unimportant HUD details. ",
+        "Never speak just to fill silence: if an item cannot support an ",
+        "interesting, useful line, omit it. ",
+        "Strict evidence rules: use only the quoted evidence below. Never add ",
+        "kills, knocks, assists, damage, identities, teams, positions, ",
+        "movements, weapons, strategies, intentions, zone status, rotations, ",
+        "map control, placement, victory, defeat, causes, or effects beyond ",
+        "the quotes. Never say a player is pushing, retreating, healing, ",
+        "fighting, camping, rotating, or aiming unless the quote says so. ",
+        "A candidate event is NOT confirmed: echo segments must keep an ",
+        "uncertainty marker such as 'unconfirmed' or 'possible'. Never ",
+        "present a candidate as a confirmed kill, knock, or victory, and ",
+        "never name a killer, victim, or outcome the quotes do not give. ",
+        "Mention a player name only when the quote contains it. Do not read ",
+        "JSON, field names, UI labels, or long detail lists aloud. No ",
+        "markdown, headings, emojis, or excessive exclamation marks. ",
+        "Respond with ONLY a single JSON object, no markdown fences, no ",
+        "commentary, matching this shape: ",
+        '{"segments": [{"source_claim_ids": [<one or more ids below>], ',
+        '"text": <the spoken line>}]}. ',
+        "Omit any item you cannot word safely. ",
+    ]
+    for claim in claims:
+        evidence = " / ".join(claim["evidence"])[:WRITER_MAX_EVIDENCE_CHARS]
+        parts.append(
+            f"Claim {claim['claim_id']} (at {claim['timestamp']}s, "
+            f"confidence {claim['confidence']}, "
+            f"evidence: {evidence})."
+        )
+        if claim["qualification"] is not None:
+            parts.append(f" Keep uncertainty: {claim['qualification']}.")
+        parts.append(" ")
+    if history_texts:
+        parts.append("Already said (do not repeat this information): ")
+        parts.append(" | ".join(history_texts[-SCRIPT_MAX_HISTORY_LINES:]))
+    return "".join(parts)
+
+
+def _script_norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", " ", text.lower()).strip()
+
+
+def _script_numbers(text: str) -> list:
+    numbers = []
+    for match in re.finditer(r"\d+(?:\.\d+)?", text):
+        token = match.group(0)
+        numbers.append(float(token) if "." in token else int(token))
+    for word, value in SCRIPT_WORD_NUMBERS.items():
+        if re.search(rf"\b{word}\b", text.lower()):
+            numbers.append(value)
+    return numbers
+
+
+def _stem_present(lowered: str, stems: tuple) -> bool:
+    return any(stem in lowered for stem in stems)
+
+
+def script_text_valid(text: str, cited_claims: list) -> bool:
+    """Deterministic paraphrase check for one script segment.
+
+    Paraphrase is allowed: evidence quotes need not appear verbatim.
+    What is enforced instead: TTS-ready shape, no invented names or
+    numbers, no forbidden semantic additions beyond the cited evidence,
+    and preserved uncertainty for candidate events. Returns True only
+    when the wording passes every check.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return False
+    stripped = text.strip()
+    if not (SCRIPT_MIN_TEXT_CHARS <= len(stripped) <= SCRIPT_MAX_TEXT_CHARS):
+        return False
+    if "```" in text or text.lstrip().startswith("#"):
+        return False
+    if "**" in text or "claim_id" in text or "source_claim_ids" in text:
+        return False
+    if text.count("!") > 2:
+        return False
+    evidence_texts = []
+    for claim in cited_claims:
+        evidence_texts.extend(claim["evidence"])
+    evidence_joined = " / ".join(evidence_texts)
+    evidence_lower = evidence_joined.lower()
+    text_lower = text.lower()
+    evidence_names = set()
+    for quote in evidence_texts:
+        evidence_names.update(m.group(0) for m in EVENT_NAME_RE.finditer(quote))
+    for token in _feed_name_tokens(text):
+        if token not in evidence_names:
+            return False
+    evidence_numbers = set(_script_numbers(evidence_joined))
+    cited_timestamps = {claim["timestamp"] for claim in cited_claims}
+    for number in _script_numbers(text):
+        if number not in evidence_numbers and number not in cited_timestamps:
+            return False
+    if not _stem_present(evidence_lower, SCRIPT_KILL_STEMS):
+        if _stem_present(text_lower, SCRIPT_KILL_STEMS):
+            return False
+    if not _stem_present(evidence_lower, SCRIPT_OUTCOME_STEMS):
+        if _stem_present(text_lower, SCRIPT_OUTCOME_STEMS):
+            return False
+    if not _stem_present(evidence_lower, SCRIPT_ACTION_STEMS):
+        if _stem_present(text_lower, SCRIPT_ACTION_STEMS):
+            return False
+    if not _stem_present(evidence_lower, SCRIPT_ZONE_STEMS):
+        if _stem_present(text_lower, SCRIPT_ZONE_STEMS):
+            return False
+    for marker in SCRIPT_CAUSAL_MARKERS:
+        if marker in text_lower and marker not in evidence_lower:
+            return False
+    for marker in SCRIPT_INTENT_MARKERS:
+        if marker in text_lower and marker not in evidence_lower:
+            return False
+    if any(claim.get("type") == "event_echo" for claim in cited_claims):
+        if not any(m in text_lower for m in SCRIPT_UNCERTAINTY_MARKERS):
+            return False
+        # Word boundaries matter: "unconfirmed" must not trip "confirmed".
+        if any(
+            re.search(rf"\b{re.escape(marker)}\b", text_lower)
+            for marker in SCRIPT_CERTAINTY_MARKERS
+        ):
+            return False
+    return True
+
+
+def parse_script_segments(text: str, claims_by_id: dict) -> list:
+    """Parse model JSON into [(source_claim_ids, text)].
+
+    Raises ObservationError on malformed JSON, unknown or duplicate claim
+    ids, or empty wordings. Omissions (claims the model skipped) are fine
+    and simply absent from the result.
+    """
+    data = parse_observation(text)
+    if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
+        raise ObservationError(
+            "Script output must be a JSON object with a 'segments' list."
+        )
+    _reject_extra(data, ("segments",), "Script output")
+    parsed = []
+    seen: set = set()
+    for index, entry in enumerate(data["segments"]):
+        where = f"script segments[{index}]"
+        if not isinstance(entry, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(entry, ("source_claim_ids", "text"), where)
+        ids = entry.get("source_claim_ids")
+        wording = entry.get("text")
+        if (
+            not isinstance(ids, list) or not ids
+            or any(not isinstance(i, str) or not i.strip() for i in ids)
+        ):
+            raise ObservationError(
+                f"{where} requires 'source_claim_ids' as a non-empty list."
+            )
+        if not isinstance(wording, str) or not wording.strip():
+            raise ObservationError(f"{where} requires a non-empty 'text'.")
+        for claim_id in ids:
+            if claim_id not in claims_by_id:
+                raise ObservationError(
+                    f"{where} cites unknown claim '{claim_id}'."
+                )
+            if claim_id in seen:
+                raise ObservationError(
+                    f"{where} duplicates claim '{claim_id}'."
+                )
+        for claim_id in ids:
+            seen.add(claim_id)
+        parsed.append((list(ids), wording))
+    return parsed
+
+
+def validate_script(data: dict, claims_by_id: dict | None = None) -> dict:
+    """Strictly validate a script-v1 document; reject anything else.
+
+    Shape is always checked. When ``claims_by_id`` (gated claims keyed by
+    stable claim id) is supplied, provenance is checked too: every cited
+    claim id must be known and used at most once, timestamps must equal
+    the latest cited evidence timestamp, segments must be chronological,
+    and each text must pass :func:`script_text_valid`. Diagnostics live
+    in ``omitted``/``error``, never in speakable ``text``.
+    """
+    if not isinstance(data, dict):
+        raise ObservationError("Script must be a JSON object.")
+    _reject_extra(
+        data,
+        (
+            "schema_version",
+            "status",
+            "generated_from",
+            "segments",
+            "omitted",
+            "error",
+        ),
+        "Script",
+    )
+    if data.get("schema_version") != SCRIPT_SCHEMA_VERSION:
+        raise ObservationError(
+            f"Script requires schema_version '{SCRIPT_SCHEMA_VERSION}'."
+        )
+    if data.get("status") not in SCRIPT_STATUSES:
+        raise ObservationError(
+            f"Script has invalid status '{data.get('status')}'."
+        )
+    generated = data.get("generated_from")
+    if not isinstance(generated, dict):
+        raise ObservationError("Script requires field 'generated_from' as an object.")
+    _reject_extra(
+        generated, ("observations", "match_state", "events"), "Script generated_from"
+    )
+    generated_observations = generated.get("observations")
+    if (
+        not isinstance(generated_observations, list)
+        or not generated_observations
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in generated_observations
+        )
+    ):
+        raise ObservationError(
+            "Script generated_from requires 'observations' as a "
+            "non-empty list of filenames."
+        )
+    _require_non_empty_string(generated, "match_state", "Script generated_from")
+    _require_non_empty_string(generated, "events", "Script generated_from")
+    if "segments" not in data or not isinstance(data["segments"], list):
+        raise ObservationError("Script requires field 'segments' as a list.")
+    seen_ids: set = set()
+    last_timestamp = None
+    for index, segment in enumerate(data["segments"]):
+        where = f"segments[{index}]"
+        if not isinstance(segment, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            segment,
+            ("segment_id", "timestamp_seconds", "text", "source_claim_ids"),
+            where,
+        )
+        _require_non_empty_string(segment, "segment_id", where)
+        if segment["segment_id"] in seen_ids:
+            raise ObservationError(f"{where} duplicates segment id.")
+        seen_ids.add(segment["segment_id"])
+        timestamp = segment.get("timestamp_seconds")
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or (isinstance(timestamp, float) and not math.isfinite(timestamp))
+        ):
+            raise ObservationError(f"{where} field 'timestamp_seconds' must be a number.")
+        if last_timestamp is not None and timestamp < last_timestamp:
+            raise ObservationError(f"{where} breaks chronological ordering.")
+        last_timestamp = timestamp
+        _require_non_empty_string(segment, "text", where)
+        stripped = segment["text"].strip()
+        if not (SCRIPT_MIN_TEXT_CHARS <= len(stripped) <= SCRIPT_MAX_TEXT_CHARS):
+            raise ObservationError(f"{where} text has an invalid length.")
+        if "```" in segment["text"] or "claim_id" in segment["text"]:
+            raise ObservationError(f"{where} text is not TTS-ready.")
+        ids = segment.get("source_claim_ids")
+        if (
+            not isinstance(ids, list) or not ids
+            or any(not isinstance(i, str) or not i.strip() for i in ids)
+        ):
+            raise ObservationError(
+                f"{where} requires 'source_claim_ids' as a non-empty list."
+            )
+    if "omitted" not in data or not isinstance(data["omitted"], list):
+        raise ObservationError("Script requires field 'omitted' as a list.")
+    for index, entry in enumerate(data["omitted"]):
+        entry_where = f"omitted[{index}]"
+        if not isinstance(entry, dict):
+            raise ObservationError(f"{entry_where} must be an object.")
+        _reject_extra(entry, ("rule", "subject", "reason"), entry_where)
+        _require_non_empty_string(entry, "rule", entry_where)
+        _require_non_empty_string(entry, "subject", entry_where)
+        _require_non_empty_string(entry, "reason", entry_where)
+    error = data.get("error")
+    if error is not None and (not isinstance(error, str) or not error.strip()):
+        raise ObservationError("Script field 'error' must be a string or null.")
+    status = data.get("status")
+    if status == "success" and not data["segments"]:
+        raise ObservationError("Script status 'success' requires segments.")
+    if status == "silence" and data["segments"]:
+        raise ObservationError("Script status 'silence' requires no segments.")
+    if status == "silence" and error is not None:
+        raise ObservationError("Script status 'silence' requires a null error.")
+    if status == "success" and error is not None:
+        raise ObservationError("Script status 'success' requires a null error.")
+    if status == "error" and error is None:
+        raise ObservationError("Script status 'error' requires an error message.")
+    if status == "error" and data["segments"]:
+        raise ObservationError("Script status 'error' requires no segments.")
+    if claims_by_id is not None:
+        used: set = set()
+        for index, segment in enumerate(data["segments"]):
+            where = f"segments[{index}]"
+            cited = []
+            for claim_id in segment["source_claim_ids"]:
+                if claim_id not in claims_by_id:
+                    raise ObservationError(
+                        f"{where} cites unknown claim '{claim_id}'."
+                    )
+                if claim_id in used:
+                    raise ObservationError(
+                        f"{where} duplicates claim '{claim_id}'."
+                    )
+                used.add(claim_id)
+                cited.append(claims_by_id[claim_id])
+            expected = max(claim["timestamp"] for claim in cited)
+            if segment["timestamp_seconds"] != expected:
+                raise ObservationError(
+                    f"{where} timestamp does not match its cited evidence."
+                )
+            if not script_text_valid(segment["text"], cited):
+                raise ObservationError(
+                    f"{where} text is not grounded in its cited evidence."
+                )
+    return data
+
+
+def load_prior_script(script_path: Path) -> tuple:
+    """Read the previous script file; return (claim_ids, texts).
+
+    A missing file means a first run; a malformed one is reported with a
+    warning and treated as a first run. Claim ids feed repeat suppression;
+    texts feed writer continuity.
+    """
+    if not script_path.is_file():
+        return set(), []
+    try:
+        prior = validate_script(
+            json.loads(script_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            f"Warning: ignoring malformed prior script {script_path}: "
+            f"{exc}. Proceeding as a first run.",
+            file=sys.stderr,
+        )
+        return set(), []
+    claim_ids = set()
+    for segment in prior["segments"]:
+        claim_ids.update(segment["source_claim_ids"])
+    claim_ids.update(
+        entry["subject"]
+        for entry in prior["omitted"]
+        if entry["rule"] == "already-emitted"
+    )
+    return claim_ids, [segment["text"] for segment in prior["segments"]]
+
+
+def run_generate_script(
+    observations_dir: Path | None = None,
+    state_path: Path | None = None,
+    events_path: Path | None = None,
+    commentary_path: Path | None = None,
+    script_path: Path | None = None,
+    frames_dir: Path | None = None,
+    client=None,
+) -> int:
+    """Generate the LLM-cast final script; return exit code.
+
+    Offline until the single bounded text-only model call: reads stored
+    observations, match state, and events (refusing stale inputs exactly
+    like commentary), gates claims with the existing logic, suppresses
+    repeats against the prior script plus already-spoken history, and
+    words at most SCRIPT_MAX_CLAIMS prioritized claims with one Muse
+    Spark request. No deterministic template text is ever presented as
+    LLM output: invalid or unsupported segments are omitted, and a
+    provider or validation failure writes an explicit ``error`` status
+    (exit 1) instead of a false success. Zero eligible claims writes a
+    ``silence`` status with no model call (exit 0). Upstream artifacts
+    are only read, never rewritten.
+    """
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    st_path = MATCH_STATE_PATH if state_path is None else Path(state_path)
+    ev_path = EVENTS_PATH if events_path is None else Path(events_path)
+    cmt_path = COMMENTARY_PATH if commentary_path is None else Path(commentary_path)
+    out_path = SCRIPT_PATH if script_path is None else Path(script_path)
+    warn_about_legacy_observations(frames_dir)
+    files = discover_observation_files(obs_dir)
+    if not files:
+        print(f"Error: no frame_*.json observations in {obs_dir}.", file=sys.stderr)
+        return 1
+    try:
+        state = validate_match_state(
+            json.loads(st_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: invalid match state {st_path}: {exc}. "
+            f"Run 'python main.py --rebuild-state' first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        events = validate_events(
+            json.loads(ev_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: invalid events file {ev_path}: {exc}. "
+            f"Run 'python main.py --detect-events' first.",
+            file=sys.stderr,
+        )
+        return 1
+    accepted: list = []
+    skipped: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    seen_digests: dict = {}
+    for timestamp, path in files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        try:
+            validated = ensure_observation_timestamp(
+                validate_observation(parse_observation(text)), timestamp
+            )
+        except ObservationError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        digest = observation_sha256(validated)
+        if digest in seen_digests.setdefault(timestamp, set()):
+            skipped.append(path.name)
+            continue
+        seen_digests[timestamp].add(digest)
+        accepted.append((timestamp, path.name, validated))
+    for name, reason in rejected:
+        print(f"  rejected: {name}: {reason}")
+    if not accepted:
+        print(
+            f"Script failed: {len(files)} discovered, "
+            f"{len(rejected)} rejected, none accepted.",
+            file=sys.stderr,
+        )
+        return 1
+    accepted_names = sorted({source for _, source, _ in accepted})
+    state_sources = {entry["timestamp"]: entry for entry in state["sources"]}
+    if sorted(state_sources) != sorted(
+        {timestamp for timestamp, _, _ in accepted}
+    ) or any(
+        state_sources[timestamp]["file"] != source_name
+        or state_sources[timestamp]["sha256"] != observation_sha256(validated)
+        for timestamp, source_name, validated in accepted
+    ):
+        print(
+            f"Error: match state {st_path} does not cover the discovered "
+            f"observations (timestamps or content differ). "
+            f"Run 'python main.py --rebuild-state' first.",
+            file=sys.stderr,
+        )
+        return 1
+    if sorted(events["generated_from"]["observations"]) != accepted_names:
+        print(
+            f"Error: events file {ev_path} does not cover the discovered "
+            f"observations. Run 'python main.py --detect-events' first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        claims, suppressed = gate_commentary_claims(
+            [(timestamp, source, validated) for timestamp, source, validated in accepted],
+            state,
+            events,
+        )
+    except ObservationError as exc:
+        print(f"Script gating failed: {exc}", file=sys.stderr)
+        return 1
+    omitted = [
+        {"rule": entry["rule"], "subject": entry["subject"], "reason": entry["reason"]}
+        for entry in suppressed
+    ]
+    prior_claims, prior_texts = load_prior_script(out_path)
+    _, _, prior_commentary_texts = load_prior_commentary(cmt_path)
+    history_texts = (prior_commentary_texts + prior_texts)[-SCRIPT_MAX_HISTORY_LINES:]
+    history_norm = [_script_norm(text) for text in history_texts if text.strip()]
+    fresh_claims = []
+    for claim in claims:
+        claim_id = claim_id_of(claim)
+        if claim_id in prior_claims:
+            omitted.append(
+                {
+                    "rule": "already-emitted",
+                    "subject": claim_id,
+                    "reason": (
+                        "identical claim already cast in a prior script; "
+                        "no new development."
+                    ),
+                }
+            )
+            continue
+        norm_evidence = [_script_norm(part) for part in claim["evidence"]]
+        if any(
+            part and any(part in spoken for spoken in history_norm)
+            for part in norm_evidence
+        ):
+            omitted.append(
+                {
+                    "rule": "already-spoken",
+                    "subject": claim_id,
+                    "reason": "evidence already covered by recent commentary.",
+                }
+            )
+            continue
+        fresh_claims.append(dict(claim, claim_id=claim_id))
+    claims_by_id = {claim["claim_id"]: claim for claim in fresh_claims}
+    generated_from = {
+        "observations": accepted_names,
+        "match_state": st_path.name,
+        "events": ev_path.name,
+    }
+
+    def write_document(document: dict) -> int:
+        try:
+            validate_script(document, claims_by_id)
+        except ObservationError as exc:
+            print(f"Script validation failed: {exc}", file=sys.stderr)
+            return 1
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(out_path, document)
+        except OSError as exc:
+            print(
+                f"Script failed: could not write {out_path}: {exc}. "
+                f"Previous script file left intact.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
+    if not fresh_claims:
+        document = {
+            "schema_version": SCRIPT_SCHEMA_VERSION,
+            "status": "silence",
+            "generated_from": generated_from,
+            "segments": [],
+            "omitted": omitted,
+            "error": None,
+        }
+        code = write_document(document)
+        if code == 0:
+            print(
+                f"Script finished: {len(files)} discovered, "
+                f"{len(accepted)} accepted, 0 segment(s), "
+                f"{len(omitted)} omitted."
+            )
+            print(f"Script snapshot: {out_path}")
+            print("Script status: silence (deliberate silence).")
+        return code
+    model_claims, overflow = prioritize_writer_claims(fresh_claims)
+    for claim in overflow:
+        omitted.append(
+            {
+                "rule": "over-claim-limit",
+                "subject": claim["claim_id"],
+                "reason": (
+                    f"claim beyond the bounded batch of {SCRIPT_MAX_CLAIMS}; "
+                    f"not sent to the model in this run."
+                ),
+            }
+        )
+    prompt_claims = list(model_claims)
+    prompt = build_script_prompt(prompt_claims, history_texts)
+    prompt_by_id = {claim["claim_id"]: claim for claim in prompt_claims}
+    try:
+        if client is None:
+            api_key = os.environ.get("BASETEN_API_KEY")
+            if not api_key:
+                raise RuntimeError(
+                    "BASETEN_API_KEY is not set in the container environment."
+                )
+            with OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL) as live_client:
+                raw = request_writer_text(live_client, prompt, api_key=api_key)
+        else:
+            raw = request_writer_text(client, prompt)
+        parsed = parse_script_segments(raw, prompt_by_id)
+    except (WriterAPIError, ObservationError) as exc:
+        message = str(exc)
+        document = {
+            "schema_version": SCRIPT_SCHEMA_VERSION,
+            "status": "error",
+            "generated_from": generated_from,
+            "segments": [],
+            "omitted": omitted
+            + [
+                {
+                    "rule": "model-output",
+                    "subject": "script-request",
+                    "reason": f"model request produced no usable output: {message}",
+                }
+            ],
+            "error": f"script generation failed: {message}",
+        }
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(out_path, document)
+        except OSError as write_exc:
+            print(
+                f"Script failed: {exc}; could not write {out_path}: "
+                f"{write_exc}. Previous script file left intact.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Script failed: {exc}", file=sys.stderr)
+        return 1
+    except RuntimeError as exc:
+        # Missing API key: fail fast before any paid call, writing nothing.
+        print(f"Script failed: {exc}", file=sys.stderr)
+        return 1
+    built = []
+    for ids, wording in parsed:
+        cited = [prompt_by_id[claim_id] for claim_id in ids]
+        if not script_text_valid(wording, cited):
+            omitted.append(
+                {
+                    "rule": "unsupported-wording",
+                    "subject": "+".join(ids),
+                    "reason": "model wording not grounded in cited evidence.",
+                }
+            )
+            continue
+        timestamp = max(claim["timestamp"] for claim in cited)
+        built.append((timestamp, sorted(ids), wording.strip()))
+    built.sort(key=lambda item: (item[0], item[1]))
+    segments = []
+    for position, (timestamp, ids, wording) in enumerate(built):
+        segments.append(
+            {
+                "segment_id": script_segment_id(position),
+                "timestamp_seconds": timestamp,
+                "text": wording,
+                "source_claim_ids": ids,
+            }
+        )
+    if not segments:
+        if not parsed:
+            document = {
+                "schema_version": SCRIPT_SCHEMA_VERSION,
+                "status": "silence",
+                "generated_from": generated_from,
+                "segments": [],
+                "omitted": omitted,
+                "error": None,
+            }
+            code = write_document(document)
+            if code == 0:
+                print(
+                    f"Script finished: {len(files)} discovered, "
+                    f"{len(accepted)} accepted, 0 segment(s), "
+                    f"{len(omitted)} omitted."
+                )
+                print(f"Script snapshot: {out_path}")
+                print("Script status: silence (deliberate silence).")
+            return code
+        document = {
+            "schema_version": SCRIPT_SCHEMA_VERSION,
+            "status": "error",
+            "generated_from": generated_from,
+            "segments": [],
+            "omitted": omitted,
+            "error": "script generation failed: model wording failed validation.",
+        }
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(out_path, document)
+        except OSError as write_exc:
+            print(
+                f"Script failed: model wording failed validation; could not "
+                f"write {out_path}: {write_exc}. Previous script file left "
+                f"intact.",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "Script failed: model wording failed validation.", file=sys.stderr
+        )
+        return 1
+    document = {
+        "schema_version": SCRIPT_SCHEMA_VERSION,
+        "status": "success",
+        "generated_from": generated_from,
+        "segments": segments,
+        "omitted": omitted,
+        "error": None,
+    }
+    code = write_document(document)
+    if code == 0:
+        print(
+            f"Script finished: {len(files)} discovered, "
+            f"{len(accepted)} accepted, {len(segments)} segment(s), "
+            f"{len(omitted)} omitted."
+        )
+        for segment in segments:
+            print(
+                f"  segment: [{segment['timestamp_seconds']}s] "
+                f"{segment['text'][:100]}"
+            )
+        print(f"Script snapshot: {out_path}")
+        print("Script status: success.")
+    return code
+
+
 def main():
     if not VIDEO_PATH.is_file():
         raise FileNotFoundError(f"Video not found: {VIDEO_PATH.resolve()}")
@@ -3339,6 +4110,14 @@ if __name__ == "__main__":
         "deterministic wording on any failure. Writes "
         "output/commentary/commentary.json like --generate-commentary.",
     )
+    mode.add_argument(
+        "--generate-script",
+        action="store_true",
+        help="Generate the TTS-ready LLM casting script from stored "
+        "observations, match_state.json, and events.json into "
+        "output/script/script.json (one bounded text-only model call; "
+        "no template fallback).",
+    )
     parser.add_argument(
         "--limit",
         type=parse_limit_argument,
@@ -3391,5 +4170,7 @@ if __name__ == "__main__":
         raise SystemExit(run_generate_commentary())
     elif args.commentary_write:
         raise SystemExit(run_generate_commentary(writer="llm"))
+    elif args.generate_script:
+        raise SystemExit(run_generate_script())
     else:
         main()

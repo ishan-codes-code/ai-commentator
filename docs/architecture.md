@@ -9,8 +9,8 @@ implementation status.
 
 Recorded or live gameplay → frame sampling → vision provider adapter →
 structured observation validation → rolling match context and event tracking
-→ evidence-aware commentary generation → text-to-speech → local playback,
-and eventually OBS audio integration.
+→ evidence-aware commentary generation → final casting script
+→ text-to-speech → local playback, and eventually OBS audio integration.
 
 ## Components
 
@@ -67,11 +67,20 @@ and eventually OBS audio integration.
   model call over gated claims, every line re-validated with template
   fallback) is implemented, verified on fixtures with fakes only, and
   opt-in; no live writer call has been made.
+- **Status (final casting script):** implemented (`script-v1`, generated
+  via `python main.py --generate-script` from the same gated claims through
+  one bounded text-only model call). Segments carry natural caster
+  paraphrase validated by deterministic grounding checks instead of
+  verbatim-quote containment, with explicit success/silence/error
+  statuses and no template fallback. Verified on fixtures with fakes
+  only; no live script call has been made.
 
 ### 6. Text-to-speech
 
 - **Responsibility:** convert commentary text to speech audio.
-- **Status:** planned.
+- **Status:** planned. Its input contract is `script-v1`
+  (see [contracts/script-v1.md](contracts/script-v1.md)); each segment's
+  `text` is directly consumable with no further rewriting stage.
 
 ### 7. Local application and eventual OBS audio integration
 

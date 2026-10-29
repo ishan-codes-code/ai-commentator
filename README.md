@@ -10,7 +10,9 @@ Output layout: `output/frames/` holds extracted JPEGs;
 `output/observations/` holds generated JSON (`frame_<timestamp>.json`
 per analysed frame plus the `match_state.json` snapshot);
 `output/events/` holds the generated `events.json` snapshot;
-`output/commentary/` holds the generated `commentary.json` snapshot.
+`output/commentary/` holds the generated `commentary.json` snapshot;
+`output/script/` holds the generated `script.json` final casting script
+(the TTS input contract; TTS itself is not implemented).
 
 ```sh
 # Build the image.
@@ -48,6 +50,13 @@ docker compose run --rm commentator python main.py --generate-commentary
 # Word gated claims with one text-only model call (paid, opt-in).
 docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
   commentator python main.py --commentary-write
+
+# Generate the TTS-ready final casting script into
+# output/script/script.json (one bounded text-only model call, paid,
+# opt-in; no template fallback — failures report an explicit error
+# status instead of false success).
+docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
+  commentator python main.py --generate-script
 
 # Generate evidence-grounded commentary into
 # output/commentary/commentary.json (offline, no API calls).
