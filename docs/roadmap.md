@@ -28,6 +28,12 @@ acceptance criteria, and what is explicitly out of scope.
 - **Acceptance:** observations for N selected frames validate; failure modes
   documented.
 - **Out of scope:** tracking state across frames, commentary.
+- **Status:** implemented, pending live verification (not complete).
+  `--vision-batch` with spread selection, per-frame validation, and failure
+  reporting is implemented and mock-verified (74 unit tests pass in Docker;
+  failure modes documented in `docs/current-state.md` and `docs/testing.md`).
+  Remaining: one authorized live `--vision-batch --limit 5` run and
+  inspection of observation quality/coverage.
 
 ## 4. Develop a rolling match-state tracker
 

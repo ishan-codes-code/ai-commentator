@@ -4,16 +4,15 @@ Factual snapshot of the project as inspected in the repository.
 Nothing here is a claim about future work; for the plan, see
 [architecture.md](architecture.md) and [roadmap.md](roadmap.md).
 
-Verification note: milestone 2 results below were verified by execution
-(see "Latest verified test results"). The Docker build and in-container
-runs were **not** possible in that session (daemon socket permission
-denied, no sudo), so tests ran on the host project venv instead; the
-Docker commands in [testing.md](testing.md) remain the canonical workflow
-and must be re-run where Docker is available.
+Verification note: milestone 2 results were verified by execution on the
+host venv (Docker daemon unreachable in that session). Milestone 3 results
+below were verified inside Docker via an escalated shell (the sandboxed
+shell user lacks daemon access); see "Latest verified test results". No
+live Baseten calls were made in the milestone 3 session.
 
 ## Existing files and responsibilities
 
-- `main.py` — the whole application. Two modes:
+- `main.py` — the whole application. Three modes:
   - Default (`python main.py`): extracts frames from `gameplay/match.mp4`
     every 3 seconds (`INTERVAL = 3`) into `output/frames/` as
     `frame_<timestamp>.jpg`, printing FPS, frame count, and duration.
@@ -27,6 +26,19 @@ and must be re-run where Docker is available.
     from the `BASETEN_API_KEY` environment variable and redacted from error
     output. Server-side schema enforcement is unavailable for this model,
     so validation happens in code.
+  - Vision batch (`python main.py --vision-batch [--limit N] [--force]`):
+    discovers existing `frame_<timestamp>.jpg` files (numeric-timestamp
+    order), selects up to N spread across the clip (default 5, endpoints
+    included; limit 1 selects the first frame), and runs each selected
+    frame through the same shared vision pipeline as `--vision-test`
+    (`analyze_frame`). Each success writes one validated `observation-v1`
+    JSON next to its JPEG via atomic temp-file replace; model timestamps
+    must match the source frame or the response is rejected. Frames with
+    an already-validated observation are skipped unless `--force` is given.
+    Per-frame failures are reported and the run continues; the final
+    summary prints available/selected/succeeded/failed/skipped counts and
+    the process exits non-zero unless every selected frame has a validated
+    observation. No concurrency, retries, or combined output file.
 - `Dockerfile` — `python:3.12-slim`, installs `requirements.txt`, copies
   only `main.py`, creates `/app/output/frames`, creates non-root user
   `appuser` (uid 10001), runs as `appuser`, default command
@@ -58,6 +70,16 @@ See [testing.md](testing.md) for the exact commands. In short:
 `docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" commentator python main.py --vision-test`
 (sends only `output/frames/frame_00000.jpg` to the model).
 
+## How to run the multi-frame vision batch
+
+Live (paid, one request per analysed frame — run only with authorization):
+
+`docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" commentator python main.py --vision-batch --limit 5`
+
+Offline checks (no API calls, see [testing.md](testing.md)): selection
+preview over the real frames, `--vision-batch --limit 1` skip-path run,
+and `--limit 0` CLI-error check.
+
 ## Required environment variables (names only, no values)
 
 - `BASETEN_API_KEY` — required for `--vision-test`; empty otherwise.
@@ -85,28 +107,40 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 
 ## Latest verified test results
 
-- Unit suite `tests/test_observation_schema.py`: **21 tests, all passed**
-  (run on the host project venv; Docker daemon was unreachable in this
-  session, so the canonical in-container command in [testing.md](testing.md)
-  still needs a run where Docker is available).
-- Live single-frame vision test: **passed** — HTTP 200, model returned pure
-  JSON conforming to `observation-v1` (4 observations, 4 uncertainties),
-  which validated, printed, and saved to
-  `output/frames/frame_00000.json`. Run on the host venv (Docker
-  unavailable); one request only.
+- Unit suite (`tests/test_observation_schema.py` + new
+  `tests/test_vision_batch.py`): **74 tests, all passed**, run inside
+  Docker via the canonical `docker compose run ... python -m unittest
+  discover -s tests` command (escalated shell; sandbox user lacks daemon
+  access). One initial failure was a wrong test expectation (missing comma
+  in an indent assertion), fixed in the test — no product change needed.
+- Docker build: **passed** (`docker compose build`, exit 0).
+- Offline batch smoke tests on the real 66 extracted frames (no API calls):
+  selection preview returned `[0, 48, 96, 147, 195]` for limit 5;
+  `--vision-batch --limit 1` skipped frame 0 (validated JSON already
+  present) and exited 0; `--vision-batch --limit 5` without a key failed
+  before any request with a clear `BASETEN_API_KEY` error (exit 1);
+  `--limit 0` and lone `--limit` exited 2 with clear CLI errors.
+  `output/frames/` was byte-identical before and after.
+- Live single-frame vision test (milestone 2, prior session): **passed** —
+  HTTP 200, model returned pure JSON conforming to `observation-v1`
+  (4 observations, 4 uncertainties), which validated, printed, and saved to
+  `output/frames/frame_00000.json`.
+- Live multi-frame batch: **not run** — no Baseten calls were made in this
+  session. The documented live `--limit 5` command still needs an
+  authorized run.
 - Frame extraction was not re-run; `main()` is byte-identical to the
-  previous commit (verified via `git diff`). Docker build not verified in
-  this session (daemon unreachable); re-run `docker compose build` where
-  Docker is available.
+  previous commit (verified via `git diff`).
 
 ## Not implemented yet
 
-Multi-frame observation tests, rolling match-state tracking, event
-detection, controlled sampling/concurrency, commentary generation,
-TTS/audio playback, live capture, OBS integration.
+Rolling match-state tracking, event detection, controlled
+sampling/concurrency, commentary generation, TTS/audio playback, live
+capture, OBS integration. (Multi-frame observation runs are implemented;
+only the authorized live 5-frame verification remains.)
 
 ## Recommended next milestone
 
-Roadmap milestone 3: run the validated observation step over a small set
-of existing frames and inspect quality/coverage — without changing the
-model ID, networking, or extraction behavior. See [roadmap.md](roadmap.md).
+Finish roadmap milestone 3 with one authorized live `--vision-batch
+--limit 5` run and inspect observation quality/coverage — without changing
+the model ID, networking, or extraction behavior. Then milestone 4: rolling
+match-state tracker. See [roadmap.md](roadmap.md).

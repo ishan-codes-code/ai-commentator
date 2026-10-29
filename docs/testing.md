@@ -43,8 +43,41 @@ docker compose run --rm -v "$PWD/tests:/app/tests:ro" \
 ```
 
 Covers `parse_observation` / `validate_observation` with fixtures for valid
-and invalid responses (see `tests/test_observation_schema.py`). Tests mount
-read-only into the container; no image change is needed to run them.
+and invalid responses (see `tests/test_observation_schema.py`), plus frame
+discovery, spread selection, the shared per-frame vision pipeline, atomic
+output writing, batch reporting, and single-frame compatibility via a fake
+API client (see `tests/test_vision_batch.py`). Tests mount read-only into
+the container; no image change is needed to run them.
+
+## Multi-frame vision batch (offline verification, no API calls)
+
+Selection and reporting without spending inference budget:
+
+```sh
+# Show what --limit 5 would select from the real extracted frames.
+docker compose run --rm commentator python -c \
+  "from main import discover_candidate_frames, select_spread_frames, OUTPUT_DIR; \
+   c = discover_candidate_frames(OUTPUT_DIR); \
+   print(len(c), [t for t, _ in select_spread_frames(c, 5)])"
+# Exercise the skip path: frame 0 already has a validated observation.
+docker compose run --rm commentator python main.py --vision-batch --limit 1
+# Invalid limits fail fast with exit code 2 and no API call.
+docker compose run --rm commentator python main.py --vision-batch --limit 0
+```
+
+## Multi-frame vision batch (live, paid)
+
+```sh
+docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
+  commentator python main.py --vision-batch --limit 5
+```
+
+Analyses up to 5 frames spread across the clip (default when `--limit` is
+omitted), saving one validated `observation-v1` JSON per frame next to its
+JPEG. Frames with an already-validated observation are skipped unless
+`--force` is given. Any per-frame failure still reports the completed
+results but exits non-zero. This makes one paid request per analysed frame;
+run it only with explicit authorization, and never default to the full clip.
 
 ## Configuration and secret-handling checks
 
