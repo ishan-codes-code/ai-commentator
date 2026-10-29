@@ -85,8 +85,29 @@ earlier authorized live batch run.
     contested evidence are suppressed, never resolved. Exit 0 only when at
     least one observation was accepted and none was rejected. See
     `docs/contracts/events-v1.md`.
+  - Commentary generation (`python main.py --generate-commentary`,
+    offline, no Baseten calls): validates observations, `match_state.json`
+    (timestamps + content hashes must cover inputs), and `events.json`
+    (its `generated_from` must cover inputs), then gates claims
+    deterministically (`gate_commentary_claims`: current facts only,
+    confidence floor, uncertainty/conflict/category scope, candidate
+    events with clean sources) and renders them with fixed templates only
+    (`render_commentary_claims`: verbatim descriptions plus a hardcoded
+    qualifier for `event_echo`; no confirmation path exists). Repeat runs
+    suppress unchanged claims against the previous commentary file
+    (missing = first run; malformed = warning + first run; emitted history
+    spans prior lines and prior `already-emitted` records so silence
+    converges). Validates the document with provenance
+    (`validate_commentary` + bundle: refs resolve, evidence contained in
+    text and sources, name-token closure, confidence ceiling, template
+    preconditions) and atomically writes
+    `output/commentary/commentary.json`. Exit 0 on valid inputs even with
+    zero lines (deliberate silence); exit 1 on invalid inputs or write
+    failure with the previous file intact. See
+    `docs/contracts/commentary-v1.md`.
 - `Dockerfile` — `python:3.12-slim`, installs `requirements.txt`, copies
-  only `main.py`, creates `/app/output/frames`, creates non-root user
+  only `main.py` (M7 stayed in `main.py`, so no Docker change was needed),
+  creates `/app/output/frames`, creates non-root user
   `appuser` (uid 10001), runs as `appuser`, default command
   `python main.py`.
 - `compose.yaml` — service `commentator`: builds `.`, overrides the
@@ -141,12 +162,15 @@ All offline (see [testing.md](testing.md)):
 
 `docker compose run --rm commentator python main.py --detect-events`
 
+`docker compose run --rm commentator python main.py --generate-commentary`
+
 ## Output directory layout
 
 - `output/frames/` — extracted JPEGs only (`frame_<timestamp>.jpg`).
 - `output/observations/` — generated JSON only: `frame_<timestamp>.json`
   per analysed frame plus the rolling snapshot `match_state.json`.
 - `output/events/` — generated event output only (`events.json`).
+- `output/commentary/` — generated commentary only (`commentary.json`).
 - Everything under `output/` is git-ignored and Docker-mounted.
 
 ## Required environment variables (names only, no values)
@@ -178,22 +202,24 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 
 - Unit suite (`tests/test_observation_schema.py` +
   `tests/test_vision_batch.py` + `tests/test_output_layout.py` +
-  `tests/test_match_state.py` + `tests/test_event_detection.py` + new
-  `tests/test_vision_jobs.py`):
-  **172 tests, all passed**, run inside Docker via the canonical
+  `tests/test_match_state.py` + `tests/test_event_detection.py` +
+  `tests/test_vision_jobs.py` + new `tests/test_commentary.py`):
+  **198 tests, all passed**, run inside Docker via the canonical
   `docker compose run ... python -m unittest discover -s tests` command
-  (escalated shell; sandbox user lacks daemon access). The 16 new jobs
-  tests cover argument validation, jobs bounds, sequential/concurrent
-  output identity, in-flight caps (barrier rendezvous, no wall-clock
-  assertions), reverse completion order, error/timeout isolation, cache
-  skip, `--force`, schema enforcement under concurrency, downstream
-  state/event identity, `--jobs` CLI rules, and client lifecycle (internal
-  clients closed on success/request/validation failure, injected clients
-  never closed). First-run failures of the
-  new tests were test-side only (fixture reads after temp-dir cleanup,
-  barrier parties not dividing frame counts, plus one stale-image run:
-  the container ran the pre-fix `main.py` until the image was rebuilt);
-  no product change was needed.
+  (escalated shell; sandbox user lacks daemon access). The 26 new
+  commentary tests cover scene/development/event-echo lines, qualifier
+  enforcement, kill/ambiguity/conflict/stale/combat suppression,
+  uncertainty scope, repeat + third-run convergence, malformed-prior
+  degradation, claim-id stability, silence-as-success, stale snapshot and
+  events refusal, malformed-input rejection, template/confidence/token/
+  evidence validation failures, and upstream preservation. First-run
+  failures were test-side only (fixture reads after temp-dir cleanup —
+  the same bug class as M6 — plus one expectation that missed the scene/
+  development subsumption rule); one genuine design fix followed (repeat
+  suppression now reads prior `already-emitted` records so silence
+  converges instead of oscillating). Earlier suites' first-run failures
+  were likewise test-side only (plus one stale-image run); no unrelated
+  product change was needed.
   Earlier milestone-5 first-run failures were likewise test- or
   fixture-side only; product fixes were limited to unifying rejected-file
   reporting, nearest-scope attribution, and sentence masking.
@@ -203,6 +229,14 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
   outputs. These numbers measure lock-step fake sleeps, not model latency,
   and are not a production speedup claim.
 - Docker build: **passed** (`docker compose build`, exit 0).
+- Commentary generation on the real tree: **passed** — first run 5
+  discovered, 5 accepted, 0 skipped, 0 rejected, **9 lines** (all
+  `development` at 195s), 41 suppressed, exit 0; second run 0 lines, 50
+  suppressed (deliberate silence), exit 0; third and fourth runs
+  byte-identical to the second (convergence verified by hash).
+  Upstream observation/state/events files unchanged (proven by the
+  preservation test; generation only reads them). Zero `event_echo`
+  lines is the honest result: the real tree has no event candidates.
 - Event detection on the real tree: **passed** — 5 discovered, 5 accepted,
   0 skipped, 0 rejected, **0 emitted**, 0 contested, exit 0. A rerun is
   byte-identical; sources and state verified unchanged afterwards. Zero
@@ -236,15 +270,16 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 
 ## Not implemented yet
 
-Commentary generation, TTS/audio playback, live capture, OBS integration,
+TTS/audio playback, live capture, OBS integration,
 Free Fire knowledge pack. (Multi-frame runs, output separation,
-match-state tracking, conservative event detection, and bounded batch
-concurrency are implemented and verified. Cosmetic note: worker-thread
+match-state tracking, conservative event detection, bounded batch
+concurrency, and evidence-grounded commentary are implemented and
+verified. Cosmetic note: worker-thread
 progress lines may interleave on stdout under `--jobs 2+`; the saved-file
 record and final summary always print deterministically from the main
 thread.)
 
 ## Recommended next milestone
 
-Roadmap milestone 7: evidence-grounded commentary generation.
+Roadmap milestone 8: TTS and audio playback.
 See [roadmap.md](roadmap.md).

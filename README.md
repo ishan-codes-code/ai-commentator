@@ -9,7 +9,8 @@ Baseten-hosted vision model. Details live in `docs/`; start with
 Output layout: `output/frames/` holds extracted JPEGs;
 `output/observations/` holds generated JSON (`frame_<timestamp>.json`
 per analysed frame plus the `match_state.json` snapshot);
-`output/events/` holds the generated `events.json` snapshot.
+`output/events/` holds the generated `events.json` snapshot;
+`output/commentary/` holds the generated `commentary.json` snapshot.
 
 ```sh
 # Build the image.
@@ -39,6 +40,10 @@ docker compose run --rm commentator python main.py --rebuild-state
 # Detect evidence-grounded events into output/events/events.json
 # (offline, no API calls).
 docker compose run --rm commentator python main.py --detect-events
+
+# Generate evidence-grounded commentary into
+# output/commentary/commentary.json (offline, no API calls).
+docker compose run --rm commentator python main.py --generate-commentary
 
 # Offline unit tests (no API calls).
 docker compose run --rm -v "$PWD/tests:/app/tests:ro" \

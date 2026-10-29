@@ -59,8 +59,11 @@ and eventually OBS audio integration.
 - **Responsibility:** produce concise commentary grounded only in validated
   observations. Must distinguish direct observations from uncertain
   interpretations and must not invent events, identities, or outcomes.
-- **Status:** planned. Today's vision prompt already encodes this rule in
-  prose; a structured, enforced version is future work.
+- **Status:** implemented (`commentary-v1`, generated offline via
+  `python main.py --generate-commentary` from validated observations,
+  match state, and event candidates through deterministic templates;
+  candidate echoes carry mandatory qualifiers, silence is explicit).
+  LM-based wording remains future work.
 
 ### 6. Text-to-speech
 

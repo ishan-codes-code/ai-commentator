@@ -29,9 +29,9 @@ acceptance criteria, and what is explicitly out of scope.
   documented.
 - **Out of scope:** tracking state across frames, commentary.
 - **Status:** complete. `--vision-batch` with spread selection, per-frame
-  validation, and failure reporting is implemented (172 unit tests pass in
+  validation, and failure reporting is implemented (198 unit tests pass in
   Docker, including the milestone-6 concurrency and client-lifecycle
-  suites). The 5 stored live
+  suites and the milestone-7 commentary suite). The 5 stored live
   observations (timestamps 0, 48, 96, 147, 195)
   validate against `observation-v1` and were content-surveyed; failure modes
   are documented in `docs/current-state.md` and `docs/testing.md`.
@@ -74,7 +74,7 @@ acceptance criteria, and what is explicitly out of scope.
 - **Status:** complete. Sampling kept at the existing 3-second extraction
   interval (no stride or intensity classifier added — recorded video needs
   no live-stream queue). `--jobs` (default 1, hard max 4) bounds concurrent
-  vision requests on the batch path; 172 unit tests pass in Docker,
+  vision requests on the batch path; 198 unit tests pass in Docker,
   including barrier-rendezvous in-flight caps and reverse-completion-order
   identity, and a synthetic mocked benchmark (jobs=1: 1.51s vs jobs=4:
   0.61s for 5 fake requests, identical outputs) documents the bound choice.
@@ -88,6 +88,14 @@ acceptance criteria, and what is explicitly out of scope.
 - **Acceptance:** sample outputs cite supporting observations; uncertain
   content is labeled; no invented events on fixtures.
 - **Out of scope:** audio output.
+- **Status:** complete. `--generate-commentary` emits `commentary-v1`
+  lines from deterministic templates over gated claims (current facts,
+  confident readings, candidate events with clean sources; qualifier
+  mandatory on echoes, confidence never upgraded); 26 fixture tests show
+  eligible lines emitted and unsupported claims suppressed with reasons,
+  including silence-as-success, repeat convergence, and stale-input
+  refusal. Real-tree run: 9 development lines, then converging silence —
+  documented as the honest result for the current evidence.
 
 ## 8. Integrate TTS and audio playback
 

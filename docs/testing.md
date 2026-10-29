@@ -162,6 +162,28 @@ nameplates, ambiguous HUD numbers, timers, persistent banners,
 low-confidence triggers, contested evidence — is suppressed. Never makes
 network calls and never rewrites sources or state.
 
+## Commentary generation (offline, no API calls)
+
+```sh
+docker compose run --rm commentator python main.py --generate-commentary
+```
+
+Reads `output/observations/frame_*.json` plus the stored
+`output/observations/match_state.json` and `output/events/events.json`,
+refuses to run when state or events do not exactly cover the discovered
+observations (rebuild/detect first), and atomically writes
+`output/commentary/commentary.json` (see
+`docs/contracts/commentary-v1.md`). Reports discovered / accepted /
+skipped / rejected / line / suppressed counts plus the output path.
+Exits 0 when inputs validate and the write succeeds — even with zero
+lines (deliberate silence, recorded with suppression reasons); exits
+non-zero on invalid inputs or write failure, leaving any previous valid
+file intact. Repeat runs suppress unchanged claims against the previous
+file (missing = first run; malformed = warning + first run); only
+`current` facts, confident readings, and candidate events with clean
+sources can yield lines. Never makes network calls and never rewrites
+sources, state, or events.
+
 ## Configuration and secret-handling checks
 
 - `.env` exists locally and is git-ignored: `git check-ignore -v .env`

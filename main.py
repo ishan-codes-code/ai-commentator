@@ -49,6 +49,38 @@ EVENT_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_]+")
 EVENT_ELIM_RE = re.compile(r"Elim\s+(\d+)")
 EVENT_TEAM_SCOPE_RE = re.compile(r"\bteam\s+([A-Za-z0-9_]+)", re.IGNORECASE)
 EVENT_TRIGGER_CONFIDENCES = ("high", "medium")
+COMMENTARY_DIR = Path("output/commentary")
+COMMENTARY_FILENAME = "commentary.json"
+COMMENTARY_PATH = COMMENTARY_DIR / COMMENTARY_FILENAME
+COMMENTARY_SCHEMA_VERSION = "commentary-v1"
+COMMENTARY_TYPES = ("scene", "development", "event_echo")
+COMMENTARY_PRIOR_STATUSES = ("absent", "ok", "ignored-malformed")
+COMMENTARY_TEMPLATES = (
+    "scene_visible",
+    "hud_reading",
+    "development_new",
+    "development_update",
+    "event_echo",
+)
+COMMENTARY_SCENE_CATEGORIES = ("environment", "character")
+COMMENTARY_QUALIFIERS = {
+    "kill_feed_entry": "killer and victim roles are not established",
+    "elim_count_increased": (
+        "who was eliminated, by whom, and by what means are not established"
+    ),
+}
+COMMENTARY_GATE_RULES = (
+    "valid-inputs",
+    "no-conflicted-evidence",
+    "confidence-floor",
+    "uncertainty-scope",
+    "category-scope",
+    "no-elimination-from-absence",
+    "already-emitted",
+    "no-justified-wording",
+    "stale-fact",
+    "subsumed-by-development",
+)
 DEFAULT_VISION_BATCH_LIMIT = 5
 DEFAULT_VISION_BATCH_JOBS = 1
 MAX_VISION_BATCH_JOBS = 4
@@ -1797,6 +1829,901 @@ def run_state_rebuild(
     return 0
 
 
+def commentary_hash(payload: dict) -> str:
+    """Hex digest of a commentary payload's canonical JSON form."""
+    canonical = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def commentary_claim_id(
+    line_type: str,
+    template: str,
+    evidence: list,
+    source_ids: list,
+    timestamp,
+) -> str:
+    """Stable claim identity for repetition suppression.
+
+    The latest evidence timestamp is part of the identity: identical
+    evidence at the same timestamp is the same claim (suppressible), while
+    a re-sighting at a new timestamp is a new claim (re-emitted).
+    """
+    return "clm-" + commentary_hash(
+        {
+            "type": line_type,
+            "template": template,
+            "evidence": evidence,
+            "sources": sorted(source_ids),
+            "timestamp": timestamp,
+        }
+    )[:12]
+
+
+def commentary_line_id(claim_id: str, seq: int, timestamp) -> str:
+    """Run-unique line id derived from the stable claim id."""
+    return "cmt-" + commentary_hash(
+        {"claim": claim_id, "seq": seq, "timestamp": timestamp}
+    )[:12]
+
+
+def validate_commentary(data: dict, bundle=None) -> dict:
+    """Strictly validate a commentary-v1 document; reject anything else.
+
+    Shape is always checked. When ``bundle`` (``{"observations": ...,
+    "state": ..., "events": ...}``) is supplied, provenance is checked too:
+    source refs must resolve, evidence must be contained in both cited
+    observation text and line text, named tokens must close over the
+    evidence, confidence must not exceed any cited source, and the template
+    must be allowlisted with its qualification rule satisfied.
+    """
+    if not isinstance(data, dict):
+        raise ObservationError("Commentary must be a JSON object.")
+    _reject_extra(
+        data,
+        (
+            "schema_version",
+            "generated_from",
+            "prior_commentary",
+            "rules_evaluated",
+            "lines",
+            "suppressed",
+        ),
+        "Commentary",
+    )
+    if data.get("schema_version") != COMMENTARY_SCHEMA_VERSION:
+        raise ObservationError(
+            "Commentary requires schema_version "
+            f"'{COMMENTARY_SCHEMA_VERSION}'."
+        )
+    generated = data.get("generated_from")
+    if not isinstance(generated, dict):
+        raise ObservationError(
+            "Commentary requires field 'generated_from' as an object."
+        )
+    _reject_extra(
+        generated, ("observations", "match_state", "events"), "Commentary generated_from"
+    )
+    generated_observations = generated.get("observations")
+    if (
+        not isinstance(generated_observations, list)
+        or not generated_observations
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in generated_observations
+        )
+    ):
+        raise ObservationError(
+            "Commentary generated_from requires 'observations' as a "
+            "non-empty list of filenames."
+        )
+    _require_non_empty_string(generated, "match_state", "Commentary generated_from")
+    _require_non_empty_string(generated, "events", "Commentary generated_from")
+    prior = data.get("prior_commentary")
+    if not isinstance(prior, dict):
+        raise ObservationError(
+            "Commentary requires field 'prior_commentary' as an object."
+        )
+    _reject_extra(prior, ("file", "status"), "Commentary prior_commentary")
+    _require_non_empty_string(prior, "file", "Commentary prior_commentary")
+    if prior.get("status") not in COMMENTARY_PRIOR_STATUSES:
+        raise ObservationError(
+            "Commentary prior_commentary has invalid status "
+            f"'{prior.get('status')}'."
+        )
+    rules = data.get("rules_evaluated")
+    if not isinstance(rules, list) or any(
+        not isinstance(item, str) or not item.strip() for item in rules
+    ):
+        raise ObservationError(
+            "Commentary requires field 'rules_evaluated' as a list of rule names."
+        )
+    if "lines" not in data or not isinstance(data["lines"], list):
+        raise ObservationError("Commentary requires field 'lines' as a list.")
+    seen_seqs: dict = {}
+    for index, line in enumerate(data["lines"]):
+        where = f"lines[{index}]"
+        if not isinstance(line, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            line,
+            (
+                "schema_version",
+                "id",
+                "claim_id",
+                "timestamp",
+                "seq",
+                "type",
+                "template",
+                "text",
+                "sources",
+                "event_id",
+                "evidence",
+                "confidence",
+                "qualification",
+            ),
+            where,
+        )
+        if line.get("schema_version") != COMMENTARY_SCHEMA_VERSION:
+            raise ObservationError(
+                f"{where} requires schema_version '{COMMENTARY_SCHEMA_VERSION}'."
+            )
+        _require_non_empty_string(line, "id", where)
+        _require_non_empty_string(line, "claim_id", where)
+        line_ts = line.get("timestamp")
+        if (
+            isinstance(line_ts, bool)
+            or not isinstance(line_ts, (int, float))
+            or (isinstance(line_ts, float) and not math.isfinite(line_ts))
+        ):
+            raise ObservationError(f"{where} field 'timestamp' must be a number.")
+        seq = line.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+            raise ObservationError(
+                f"{where} field 'seq' must be a non-negative integer."
+            )
+        key = (line_ts, seq)
+        if key in seen_seqs:
+            raise ObservationError(
+                f"{where} duplicates (timestamp, seq) of {seen_seqs[key]}."
+            )
+        seen_seqs[key] = where
+        if line.get("type") not in COMMENTARY_TYPES:
+            raise ObservationError(
+                f"{where} has invalid type '{line.get('type')}'."
+            )
+        if line.get("template") not in COMMENTARY_TEMPLATES:
+            raise ObservationError(
+                f"{where} has unknown template '{line.get('template')}'."
+            )
+        _require_non_empty_string(line, "text", where)
+        sources = line.get("sources")
+        if (
+            not isinstance(sources, list)
+            or not sources
+            or any(not isinstance(item, dict) for item in sources)
+        ):
+            raise ObservationError(
+                f"{where} requires 'sources' as a non-empty list of objects."
+            )
+        for entry_index, entry in enumerate(sources):
+            entry_where = f"{where}.sources[{entry_index}]"
+            _reject_extra(entry, ("timestamp", "file", "fact_id"), entry_where)
+            entry_ts = entry.get("timestamp")
+            if (
+                isinstance(entry_ts, bool)
+                or not isinstance(entry_ts, (int, float))
+                or (isinstance(entry_ts, float) and not math.isfinite(entry_ts))
+            ):
+                raise ObservationError(
+                    f"{entry_where} field 'timestamp' must be a number."
+                )
+            _require_non_empty_string(entry, "file", entry_where)
+            _require_non_empty_string(entry, "fact_id", entry_where)
+        event_id = line.get("event_id")
+        if event_id is not None and (
+            not isinstance(event_id, str) or not event_id.strip()
+        ):
+            raise ObservationError(
+                f"{where} field 'event_id' must be a non-empty string or null."
+            )
+        evidence = line.get("evidence")
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or any(
+                not isinstance(item, str) or not item.strip() for item in evidence
+            )
+        ):
+            raise ObservationError(
+                f"{where} requires 'evidence' as a non-empty list of strings."
+            )
+        if line.get("confidence") not in OBSERVATION_CONFIDENCES:
+            raise ObservationError(
+                f"{where} has invalid confidence '{line.get('confidence')}'."
+            )
+        qualification = line.get("qualification")
+        if line["type"] == "event_echo":
+            if not isinstance(qualification, str) or not qualification.strip():
+                raise ObservationError(
+                    f"{where} of type 'event_echo' requires a non-empty "
+                    f"'qualification'."
+                )
+            if event_id is None:
+                raise ObservationError(
+                    f"{where} of type 'event_echo' requires an 'event_id'."
+                )
+        else:
+            if qualification is not None:
+                raise ObservationError(
+                    f"{where} of type '{line['type']}' requires "
+                    f"'qualification' to be null."
+                )
+            if event_id is not None:
+                raise ObservationError(
+                    f"{where} of type '{line['type']}' requires 'event_id' "
+                    f"to be null."
+                )
+    if "suppressed" not in data or not isinstance(data["suppressed"], list):
+        raise ObservationError("Commentary requires field 'suppressed' as a list.")
+    for index, entry in enumerate(data["suppressed"]):
+        entry_where = f"suppressed[{index}]"
+        if not isinstance(entry, dict):
+            raise ObservationError(f"{entry_where} must be an object.")
+        _reject_extra(entry, ("rule", "subject", "reason"), entry_where)
+        _require_non_empty_string(entry, "rule", entry_where)
+        _require_non_empty_string(entry, "subject", entry_where)
+        _require_non_empty_string(entry, "reason", entry_where)
+    if bundle is not None:
+        _verify_commentary_provenance(data, bundle)
+    return data
+
+
+def _verify_commentary_provenance(data: dict, bundle: dict) -> None:
+    """Check every line against the input bundle; raise on mismatch.
+
+    The bundle carries ``observations`` ({filename: validated}), ``state``
+    (validated match-state-v1), and ``events`` (validated events-v1).
+    Containment and token checks are necessary but not sufficient proof of
+    support: they bind wording to quoted evidence, while the template
+    precondition inputs (checked here per template) establish that the
+    claim itself was gated.
+    """
+    observations = bundle["observations"]
+    state = bundle["state"]
+    events = bundle["events"]
+    facts_by_id = {fact["id"]: fact for fact in state["facts"]}
+    events_by_id = {event["id"]: event for event in events["events"]}
+    for index, line in enumerate(data["lines"]):
+        where = f"lines[{index}]"
+        source_confidences = []
+        cited_texts = []
+        for entry in line["sources"]:
+            validated = observations.get(entry["file"])
+            if validated is None:
+                raise ObservationError(
+                    f"{where} cites unknown observation '{entry['file']}'."
+                )
+            if validated["timestamp"] != entry["timestamp"]:
+                raise ObservationError(
+                    f"{where} source timestamp does not match "
+                    f"'{entry['file']}'."
+                )
+            fact = facts_by_id.get(entry["fact_id"])
+            if fact is None:
+                raise ObservationError(
+                    f"{where} cites unknown fact '{entry['fact_id']}'."
+                )
+            if fact["status"] == "conflicted":
+                raise ObservationError(
+                    f"{where} cites conflicted fact '{entry['fact_id']}'."
+                )
+            source_confidences.append(fact["confidence"])
+            for item in validated["observations"]:
+                if fact_key(item["category"], item["description"]) == (
+                    fact["category"],
+                    fact["description"],
+                ):
+                    cited_texts.append(item["description"])
+                    cited_texts.append(item["evidence"])
+        for quote in line["evidence"]:
+            if not any(quote in text for text in cited_texts):
+                raise ObservationError(
+                    f"{where} evidence is not quoted from its cited sources."
+                )
+            if quote not in line["text"]:
+                raise ObservationError(
+                    f"{where} evidence is not contained in the line text."
+                )
+        evidence_tokens = set()
+        for quote in line["evidence"]:
+            evidence_tokens.update(
+                match.group(0) for match in EVENT_NAME_RE.finditer(quote)
+            )
+        for token in _feed_name_tokens(line["text"]):
+            if token not in evidence_tokens:
+                raise ObservationError(
+                    f"{where} names '{token}' outside its cited evidence."
+                )
+        order = ("high", "medium", "low")
+        if order.index(line["confidence"]) > min(
+            order.index(confidence) for confidence in source_confidences
+        ):
+            raise ObservationError(
+                f"{where} confidence exceeds a cited source confidence."
+            )
+        _verify_commentary_template(line, where, facts_by_id, events_by_id)
+
+
+def _verify_commentary_template(line: dict, where: str, facts_by_id: dict, events_by_id: dict) -> None:
+    """Check a line's template precondition inputs; raise on mismatch.
+
+    Each template names the exact inputs its claim requires. The renderer
+    can only invoke these templates, so passing this check means the line
+    was gated — not merely that its text contains the right quotes.
+    """
+    template = line["template"]
+    facts = [facts_by_id[entry["fact_id"]] for entry in line["sources"]]
+    if template == "scene_visible":
+        if line["type"] != "scene" or len(facts) != 1:
+            raise ObservationError(
+                f"{where} template 'scene_visible' requires type 'scene' "
+                f"with exactly one fact."
+            )
+        fact = facts[0]
+        if (
+            fact["category"] not in COMMENTARY_SCENE_CATEGORIES
+            or fact["status"] != "current"
+            or fact["confidence"] not in EVENT_TRIGGER_CONFIDENCES
+        ):
+            raise ObservationError(
+                f"{where} template 'scene_visible' requires a current "
+                f"high/medium environment or character fact."
+            )
+    elif template == "hud_reading":
+        if line["type"] != "scene" or len(facts) != 1:
+            raise ObservationError(
+                f"{where} template 'hud_reading' requires type 'scene' "
+                f"with exactly one fact."
+            )
+        fact = facts[0]
+        if (
+            fact["category"] != "hud"
+            or fact["status"] != "current"
+            or fact["confidence"] not in EVENT_TRIGGER_CONFIDENCES
+        ):
+            raise ObservationError(
+                f"{where} template 'hud_reading' requires a current "
+                f"high/medium hud fact."
+            )
+    elif template in ("development_new", "development_update"):
+        if line["type"] != "development" or len(facts) != 1:
+            raise ObservationError(
+                f"{where} template '{template}' requires type "
+                f"'development' with exactly one fact."
+            )
+        fact = facts[0]
+        if (
+            fact["category"] not in COMMENTARY_SCENE_CATEGORIES + ("hud",)
+            or fact["status"] != "current"
+            or fact["confidence"] not in EVENT_TRIGGER_CONFIDENCES
+        ):
+            raise ObservationError(
+                f"{where} template '{template}' requires a current "
+                f"high/medium environment, character, or hud fact."
+            )
+    elif template == "event_echo":
+        if line["type"] != "event_echo":
+            raise ObservationError(
+                f"{where} template 'event_echo' requires type 'event_echo'."
+            )
+        event = events_by_id.get(line["event_id"])
+        if event is None or event["status"] != "candidate":
+            raise ObservationError(
+                f"{where} cites no candidate event '{line['event_id']}'."
+            )
+    else:  # Unreachable: the template enum is validated above.
+        raise ObservationError(f"{where} has unknown template '{template}'.")
+
+
+def _commentary_uncertainty_tokens(accepted: list) -> dict:
+    """Map name tokens named in uncertainties to their source filenames.
+
+    A claim quoting a token that a source uncertainty also names is about
+    something the model itself flagged as uncertain, so the gate
+    suppresses it (rule ``uncertainty-scope``).
+    """
+    tokens: dict = {}
+    for _, source_name, validated in accepted:
+        for text in validated["uncertainties"]:
+            for token in _feed_name_tokens(text):
+                tokens.setdefault(token, set()).add(source_name)
+    return tokens
+
+
+def _commentary_fact_claim(
+    fact: dict,
+    source_name: str,
+    uncertainty_tokens: dict,
+    subject: str,
+) -> tuple:
+    """Gate one fact for scene wording; return (claim, suppression).
+
+    Exactly one of the pair is non-None. The claim carries the template
+    key and the verbatim description it may restate — nothing else — so
+    the renderer cannot combine facts or add interpretations.
+    """
+    if fact["status"] == "conflicted":
+        return None, ("no-conflicted-evidence", subject,
+                      f"fact '{fact['id']}' is conflicted; nothing is asserted.")
+    if fact["confidence"] not in EVENT_TRIGGER_CONFIDENCES:
+        return None, ("confidence-floor", subject,
+                      f"fact '{fact['id']}' confidence "
+                      f"'{fact['confidence']}' is below the floor.")
+    if fact["category"] in ("combat", "other"):
+        return None, ("category-scope", subject,
+                      f"fact '{fact['id']}' category '{fact['category']}' "
+                      f"is never scene wording.")
+    quoted = {token for token in _feed_name_tokens(fact["description"])}
+    quoted.update(_feed_name_tokens(fact["evidence"]))
+    clashing = sorted(
+        token for token in quoted if token in uncertainty_tokens
+    )
+    if clashing:
+        return None, ("uncertainty-scope", subject,
+                      f"fact '{fact['id']}' quotes {', '.join(clashing)}, "
+                      f"named as uncertain in its sources.")
+    if fact["category"] == "hud":
+        template = "hud_reading"
+    else:
+        template = "scene_visible"
+    source = {
+        "timestamp": fact["last_seen"],
+        "file": source_name,
+        "fact_id": fact["id"],
+    }
+    return (
+        {
+            "template": template,
+            "type": "scene",
+            "timestamp": fact["last_seen"],
+            "sources": [source],
+            "source_ids": [fact["id"]],
+            "event_id": None,
+            "evidence": [fact["description"]],
+            "confidence": fact["confidence"],
+            "qualification": None,
+        },
+        None,
+    )
+
+
+def gate_commentary_claims(accepted: list, state: dict, events: dict) -> tuple:
+    """Evaluate gating rules over validated inputs; return (claims, suppressed).
+
+    ``accepted`` is ``[(timestamp, source, validated)]`` with validated
+    observations. Every candidate is checked in rule order; the first
+    failure emits one suppression record. Scene wording considers only
+    ``current`` facts; developments additionally require a latest-timestamp
+    change; event echoes require a candidate event with clean sources.
+    """
+    claims = []
+    suppressed = []
+    seen_claims: set = set()
+    uncertainty_tokens = _commentary_uncertainty_tokens(accepted)
+    facts_by_id = {fact["id"]: fact for fact in state["facts"]}
+    latest = state["latest_timestamp"]
+    contested = {
+        conflict["timestamp"] for conflict in state.get("conflicts", [])
+    }
+
+    def emit(claim):
+        key = (
+            claim["template"],
+            claim["timestamp"],
+            tuple(sorted(claim["source_ids"])),
+        )
+        if key in seen_claims:
+            return
+        seen_claims.add(key)
+        claims.append(claim)
+
+    def suppress(rule, subject, reason):
+        suppressed.append({"rule": rule, "subject": subject, "reason": reason})
+
+    for fact in state["facts"]:
+        subject = f"fact '{fact['id']}'"
+        if fact["first_seen"] in contested or fact["last_seen"] in contested:
+            suppress("no-conflicted-evidence", subject,
+                     f"fact '{fact['id']}' touches a contested timestamp.")
+            continue
+        if fact["status"] != "current":
+            suppress("stale-fact", subject,
+                     f"fact '{fact['id']}' is '{fact['status']}'; "
+                     f"only current facts yield scene wording.")
+            continue
+        claim, suppression = _commentary_fact_claim(
+            fact, fact["last_source"], uncertainty_tokens, subject
+        )
+        if suppression is not None:
+            suppress(*suppression)
+        else:
+            emit(claim)
+    latest_changes = [
+        change for change in state.get("changes", [])
+        if change["timestamp"] == latest
+    ]
+    for change in latest_changes:
+        fact = facts_by_id.get(change["fact_id"])
+        subject = f"change at {change['timestamp']}s ({change['kind']})"
+        if fact is None:
+            suppress("valid-inputs", subject,
+                     f"change cites unknown fact '{change['fact_id']}'.")
+            continue
+        if fact["status"] != "current":
+            suppress("category-scope", subject,
+                     f"changed fact '{fact['id']}' is '{fact['status']}'.")
+            continue
+        claim, suppression = _commentary_fact_claim(
+            fact, fact["last_source"], uncertainty_tokens, subject
+        )
+        if suppression is not None:
+            suppress(*suppression)
+            continue
+        template = (
+            "development_new" if change["kind"] == "new_fact"
+            else "development_update"
+        )
+        claim = dict(claim)
+        claim["template"] = template
+        claim["type"] = "development"
+        emit(claim)
+    for event in events.get("events", []):
+        subject = f"event '{event['id']}'"
+        if event["status"] != "candidate":
+            suppress("valid-inputs", subject,
+                     f"event '{event['id']}' status "
+                     f"'{event['status']}' is not a candidate.")
+            continue
+        rule_base = event["rule"].split("/")[0]
+        qualifier = COMMENTARY_QUALIFIERS.get(rule_base)
+        if qualifier is None:
+            suppress("no-justified-wording", subject,
+                     f"no approved wording for rule '{event['rule']}'.")
+            continue
+        dirty = [
+            source for source in event["sources"]
+            if facts_by_id.get(source["fact_id"], {}).get("status") == "conflicted"
+            or source["timestamp"] in contested
+        ]
+        if dirty:
+            suppress("no-conflicted-evidence", subject,
+                     f"event '{event['id']}' rests on conflicted evidence.")
+            continue
+        if event["confidence"] not in EVENT_TRIGGER_CONFIDENCES:
+            suppress("confidence-floor", subject,
+                     f"event '{event['id']}' confidence "
+                     f"'{event['confidence']}' is below the floor.")
+            continue
+        emit(
+            {
+                "template": "event_echo",
+                "type": "event_echo",
+                "timestamp": event["timestamp"],
+                "sources": list(event["sources"]),
+                "source_ids": [source["fact_id"] for source in event["sources"]],
+                "event_id": event["id"],
+                "evidence": list(event["evidence"]),
+                "confidence": event["confidence"],
+                "qualification": qualifier,
+            }
+        )
+    developed = {
+        (claim["timestamp"], source_id)
+        for claim in claims
+        if claim["type"] == "development"
+        for source_id in claim["source_ids"]
+    }
+    if developed:
+        kept = []
+        for claim in claims:
+            if claim["type"] == "scene" and any(
+                (claim["timestamp"], source_id) in developed
+                for source_id in claim["source_ids"]
+            ):
+                suppress(
+                    "subsumed-by-development",
+                    f"fact '{claim['source_ids'][0]}'",
+                    "scene wording subsumed by the development line for "
+                    "the same new evidence.",
+                )
+            else:
+                kept.append(claim)
+        claims = kept
+    return claims, suppressed
+
+
+def render_commentary_claims(claims: list) -> list:
+    """Render gated claims with their templates; return line dicts.
+
+    Each template is a fixed prefix plus verbatim validated strings. The
+    renderer takes no other inputs, so it cannot combine facts or add
+    interpretations outside the claim's approved wording.
+    """
+    ordered = sorted(
+        claims,
+        key=lambda claim: (
+            claim["timestamp"],
+            claim["template"],
+            sorted(claim["source_ids"]),
+        ),
+    )
+    lines = []
+    seq_by_timestamp: dict = {}
+    for claim in ordered:
+        timestamp = claim["timestamp"]
+        seq = seq_by_timestamp.get(timestamp, 0)
+        seq_by_timestamp[timestamp] = seq + 1
+        description = claim["evidence"][0]
+        if claim["template"] == "scene_visible":
+            text = f"At {timestamp}s, visible: {description}"
+        elif claim["template"] == "hud_reading":
+            text = f"HUD reads: {description}"
+        elif claim["template"] == "development_new":
+            text = f"New development: {description}"
+        elif claim["template"] == "development_update":
+            text = f"Update: {description}"
+        elif claim["template"] == "event_echo":
+            quoted = " — ".join(claim["evidence"])
+            text = f"{quoted} — unconfirmed: {claim['qualification']}"
+        else:  # Unreachable: the gate emits only approved templates.
+            raise ObservationError(
+                f"Unknown commentary template '{claim['template']}'."
+            )
+        claim_id = commentary_claim_id(
+            claim["type"],
+            claim["template"],
+            claim["evidence"],
+            claim["source_ids"],
+            timestamp,
+        )
+        lines.append(
+            {
+                "schema_version": COMMENTARY_SCHEMA_VERSION,
+                "id": commentary_line_id(claim_id, seq, timestamp),
+                "claim_id": claim_id,
+                "timestamp": timestamp,
+                "seq": seq,
+                "type": claim["type"],
+                "template": claim["template"],
+                "text": text,
+                "sources": claim["sources"],
+                "event_id": claim["event_id"],
+                "evidence": claim["evidence"],
+                "confidence": claim["confidence"],
+                "qualification": claim["qualification"],
+            }
+        )
+    return lines
+
+
+def run_generate_commentary(
+    observations_dir: Path | None = None,
+    state_path: Path | None = None,
+    events_path: Path | None = None,
+    commentary_path: Path | None = None,
+    frames_dir: Path | None = None,
+) -> int:
+    """Generate evidence-grounded commentary lines; return exit code.
+
+    Offline: reads only existing ``frame_<timestamp>.json`` files, the
+    stored ``match_state.json`` snapshot, and the stored ``events.json``
+    file, never calls Baseten. The snapshot and the events file must
+    exactly cover the discovered observations, otherwise generation
+    refuses to run on stale inputs. A repeat run suppresses unchanged
+    claims against the previous commentary file (a missing file means a
+    first run; a malformed one is ignored with a warning and the run
+    proceeds). Writes ``output/commentary/commentary.json`` atomically.
+    Returns 0 when inputs validate and the write succeeds — even with
+    zero lines (deliberate silence); returns 1 on invalid inputs or
+    write failure, leaving any previous valid file intact.
+    """
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    st_path = MATCH_STATE_PATH if state_path is None else Path(state_path)
+    ev_path = EVENTS_PATH if events_path is None else Path(events_path)
+    out_path = COMMENTARY_PATH if commentary_path is None else Path(commentary_path)
+    warn_about_legacy_observations(frames_dir)
+    files = discover_observation_files(obs_dir)
+    if not files:
+        print(f"Error: no frame_*.json observations in {obs_dir}.", file=sys.stderr)
+        return 1
+    try:
+        state = validate_match_state(
+            json.loads(st_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: invalid match state {st_path}: {exc}. "
+            f"Run 'python main.py --rebuild-state' first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        events = validate_events(
+            json.loads(ev_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: invalid events file {ev_path}: {exc}. "
+            f"Run 'python main.py --detect-events' first.",
+            file=sys.stderr,
+        )
+        return 1
+    accepted: list = []
+    skipped: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    seen_digests: dict = {}
+    for timestamp, path in files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        try:
+            validated = ensure_observation_timestamp(
+                validate_observation(parse_observation(text)), timestamp
+            )
+        except ObservationError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        digest = observation_sha256(validated)
+        if digest in seen_digests.setdefault(timestamp, set()):
+            skipped.append(path.name)
+            continue
+        seen_digests[timestamp].add(digest)
+        accepted.append((timestamp, path.name, validated))
+    for name, reason in rejected:
+        print(f"  rejected: {name}: {reason}")
+    if not accepted:
+        print(
+            f"Commentary failed: {len(files)} discovered, "
+            f"{len(rejected)} rejected, none accepted.",
+            file=sys.stderr,
+        )
+        return 1
+    accepted_names = sorted({source for _, source, _ in accepted})
+    state_sources = {entry["timestamp"]: entry for entry in state["sources"]}
+    if sorted(state_sources) != sorted(
+        {timestamp for timestamp, _, _ in accepted}
+    ) or any(
+        state_sources[timestamp]["file"] != source_name
+        or state_sources[timestamp]["sha256"] != observation_sha256(validated)
+        for timestamp, source_name, validated in accepted
+    ):
+        print(
+            f"Error: match state {st_path} does not cover the discovered "
+            f"observations (timestamps or content differ). "
+            f"Run 'python main.py --rebuild-state' first.",
+            file=sys.stderr,
+        )
+        return 1
+    if sorted(events["generated_from"]["observations"]) != accepted_names:
+        print(
+            f"Error: events file {ev_path} does not cover the discovered "
+            f"observations. Run 'python main.py --detect-events' first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        claims, suppressed = gate_commentary_claims(
+            [(timestamp, source, validated) for timestamp, source, validated in accepted],
+            state,
+            events,
+        )
+    except ObservationError as exc:
+        print(f"Commentary gating failed: {exc}", file=sys.stderr)
+        return 1
+    try:
+        lines = render_commentary_claims(claims)
+    except ObservationError as exc:
+        print(f"Commentary rendering failed: {exc}", file=sys.stderr)
+        return 1
+    prior_status = "absent"
+    prior_claims: set = set()
+    if out_path.is_file():
+        try:
+            prior = validate_commentary(
+                json.loads(out_path.read_text(encoding="utf-8"))
+            )
+            # Emitted history spans both prior lines and prior
+            # already-emitted records: a silent file carries no lines, so
+            # without the records the next run would re-emit everything
+            # and silence would oscillate instead of converging.
+            prior_claims = {line["claim_id"] for line in prior["lines"]}
+            prior_claims.update(
+                entry["subject"]
+                for entry in prior["suppressed"]
+                if entry["rule"] == "already-emitted"
+            )
+            prior_status = "ok"
+        except (OSError, ValueError) as exc:
+            print(
+                f"Warning: ignoring malformed prior commentary {out_path}: "
+                f"{exc}. Proceeding as a first run.",
+                file=sys.stderr,
+            )
+            prior_status = "ignored-malformed"
+    if prior_claims:
+        fresh_lines = []
+        for line in lines:
+            if line["claim_id"] in prior_claims:
+                suppressed.append(
+                    {
+                        "rule": "already-emitted",
+                        "subject": line["claim_id"],
+                        "reason": (
+                            f"identical claim already emitted at "
+                            f"{line['timestamp']}s with unchanged evidence; "
+                            f"no new development."
+                        ),
+                    }
+                )
+            else:
+                fresh_lines.append(line)
+        lines = fresh_lines
+    document = {
+        "schema_version": COMMENTARY_SCHEMA_VERSION,
+        "generated_from": {
+            "observations": accepted_names,
+            "match_state": st_path.name,
+            "events": ev_path.name,
+        },
+        "prior_commentary": {"file": out_path.name, "status": prior_status},
+        "rules_evaluated": sorted(COMMENTARY_GATE_RULES),
+        "lines": sorted(
+            lines, key=lambda line: (line["timestamp"], line["seq"], line["id"])
+        ),
+        "suppressed": suppressed,
+    }
+    try:
+        bundle = {
+            "observations": {
+                source: validated for _, source, validated in accepted
+            },
+            "state": state,
+            "events": events,
+        }
+        validate_commentary(document, bundle)
+    except ObservationError as exc:
+        print(f"Commentary validation failed: {exc}", file=sys.stderr)
+        return 1
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(out_path, document)
+    except OSError as exc:
+        print(
+            f"Commentary failed: could not write {out_path}: {exc}. "
+            f"Previous commentary file left intact.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"Commentary finished: {len(files)} discovered, "
+        f"{len(accepted)} accepted, {len(skipped)} skipped, "
+        f"{len(rejected)} rejected, {len(document['lines'])} line(s), "
+        f"{len(document['suppressed'])} suppressed."
+    )
+    for line in document["lines"]:
+        print(f"  line: [{line['timestamp']}s] {line['text'][:100]}")
+    print(f"Commentary snapshot: {out_path}")
+    if not document["lines"]:
+        print("Commentary status: success (deliberate silence).")
+    else:
+        print("Commentary status: success.")
+    return 0
+
+
 def main():
     if not VIDEO_PATH.is_file():
         raise FileNotFoundError(f"Video not found: {VIDEO_PATH.resolve()}")
@@ -2095,6 +3022,13 @@ if __name__ == "__main__":
         help="Detect evidence-grounded events from stored observations and "
         "match_state.json into output/events/events.json (offline).",
     )
+    mode.add_argument(
+        "--generate-commentary",
+        action="store_true",
+        help="Generate evidence-grounded commentary lines from stored "
+        "observations, match_state.json, and events.json into "
+        "output/commentary/commentary.json (offline).",
+    )
     parser.add_argument(
         "--limit",
         type=parse_limit_argument,
@@ -2143,5 +3077,7 @@ if __name__ == "__main__":
         raise SystemExit(run_state_rebuild())
     elif args.detect_events:
         raise SystemExit(run_detect_events())
+    elif args.generate_commentary:
+        raise SystemExit(run_generate_commentary())
     else:
         main()

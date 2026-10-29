@@ -24,3 +24,8 @@ Defined contracts:
   event identity, candidate-only statuses, the two firing rules with their
   evidence requirements, suppression rules, determinism, and replay
   provenance.
+- [commentary-v1.md](commentary-v1.md) — concise commentary lines generated
+  offline from validated observations, match state, and event candidates
+  (roadmap milestone 7): deterministic templates with evidence-shape
+  preconditions, provenance-bound validation, repetition semantics, and
+  deliberate silence.
