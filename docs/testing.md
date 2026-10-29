@@ -55,7 +55,9 @@ preservation via fixtures (see `tests/test_event_detection.py`); and
 bounded concurrency — argument/bound validation, sequential/concurrent
 output identity, in-flight caps via barrier rendezvous, reverse completion
 order, error/timeout isolation, cache skip, `--force`, schema enforcement,
-downstream state/event identity, and `--jobs` CLI rules — via fake clients
+downstream state/event identity, `--jobs` CLI rules, and client lifecycle
+  (internally created clients closed on success/request/validation failure,
+  injected clients never closed) — via fake clients
 (see `tests/test_vision_jobs.py`). Tests mount read-only into the
 container; no image change is needed to run them. There are deliberately
 no wall-clock speed assertions in the suite; the synthetic

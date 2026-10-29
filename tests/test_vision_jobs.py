@@ -12,6 +12,7 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -89,6 +91,51 @@ class FakeClient:
     @property
     def calls(self):
         return self.chat.completions.calls
+
+
+class FakeOpenAIClient:
+    """Stands in for main.OpenAI: records construction and close calls.
+
+    Mirrors the real SDK's lifecycle surface used by production
+    (context-manager protocol closing the client on exit, plus explicit
+    close()/is_closed()), so tests exercise the same path the batch
+    worker takes with a live client — without any network access.
+    """
+
+    instances = []
+    handler_override = None
+
+    def __init__(self, api_key=None, base_url=None):
+        self.api_key = api_key
+        self.base_url = base_url
+        handler = FakeOpenAIClient.handler_override or matching_handler
+        self.chat = SimpleNamespace(completions=FakeCompletions(handler))
+        self.close_calls = 0
+        FakeOpenAIClient.instances.append(self)
+
+    def close(self):
+        self.close_calls += 1
+
+    def is_closed(self):
+        return self.close_calls > 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
+
+class CloseTrackingClient(FakeClient):
+    """Caller-owned client double: close() must never be called on it."""
+
+    def __init__(self, handler):
+        super().__init__(handler)
+        self.close_calls = 0
+
+    def close(self):
+        self.close_calls += 1
 
 
 def observation_payload(timestamp):
@@ -430,6 +477,86 @@ class DownstreamCompatibilityTests(unittest.TestCase):
                 document, _ = self._detect_from_outputs(obs)
                 documents.append(document)
         self.assertEqual(documents[0], documents[1])
+
+
+class ClientLifecycleTests(unittest.TestCase):
+    """Internally created clients close; caller-owned clients never do.
+
+    main.OpenAI is patched with FakeOpenAIClient and BASETEN_API_KEY is a
+    dummy value, so these tests exercise the production factory path with
+    zero network access.
+    """
+
+    def setUp(self):
+        FakeOpenAIClient.instances = []
+        FakeOpenAIClient.handler_override = None
+
+    def tearDown(self):
+        FakeOpenAIClient.handler_override = None
+
+    def run_internal_client_batch(self, timestamps, jobs=1):
+        with (
+            patch.object(main, "OpenAI", FakeOpenAIClient),
+            patch.dict(os.environ, {"BASETEN_API_KEY": "test-dummy-key"}),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            frames, obs = make_layout(tmp, timestamps)
+            code, _, _ = run_batch_capture(
+                limit=len(timestamps), jobs=jobs,
+                directory=frames, observations_dir=obs,
+            )
+            outputs = read_outputs(obs)
+        return code, outputs
+
+    def test_internal_client_closed_after_success(self):
+        code, outputs = self.run_internal_client_batch([0, 3], jobs=2)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(outputs), [0, 3])
+        self.assertEqual(len(FakeOpenAIClient.instances), 2)
+        for instance in FakeOpenAIClient.instances:
+            self.assertTrue(instance.is_closed())
+            self.assertEqual(instance.close_calls, 1)
+
+    def test_internal_client_closed_when_request_fails(self):
+        def failing_handler(kwargs, index):
+            if prompt_timestamp(kwargs) == 3:
+                raise RuntimeError("boom-3")
+            return matching_handler(kwargs, index)
+
+        FakeOpenAIClient.handler_override = failing_handler
+        code, outputs = self.run_internal_client_batch([0, 3], jobs=2)
+        self.assertEqual(code, 1)
+        self.assertEqual(sorted(outputs), [0])
+        self.assertEqual(len(FakeOpenAIClient.instances), 2)
+        for instance in FakeOpenAIClient.instances:
+            self.assertTrue(instance.is_closed())
+
+    def test_internal_client_closed_when_validation_fails(self):
+        def wrong_stamp_handler(kwargs, index):
+            timestamp = prompt_timestamp(kwargs)
+            return completion_for(observation_text(timestamp + 1000))
+
+        FakeOpenAIClient.handler_override = wrong_stamp_handler
+        code, outputs = self.run_internal_client_batch([0, 3], jobs=1)
+        self.assertEqual(code, 1)
+        self.assertEqual(outputs, {})
+        self.assertEqual(len(FakeOpenAIClient.instances), 2)
+        for instance in FakeOpenAIClient.instances:
+            self.assertTrue(instance.is_closed())
+
+    def test_injected_client_is_not_closed(self):
+        client = CloseTrackingClient(matching_handler)
+        with tempfile.TemporaryDirectory() as tmp:
+            frames, obs = make_layout(tmp, [0, 3, 6])
+            code, _, _ = run_batch_capture(
+                limit=3, jobs=2, client=client,
+                directory=frames, observations_dir=obs,
+            )
+            self.assertEqual(code, 0)
+            outputs = read_outputs(obs)
+        self.assertEqual(sorted(outputs), [0, 3, 6])
+        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(client.close_calls, 0)
 
 
 class CliJobsTests(unittest.TestCase):

@@ -1,5 +1,6 @@
 import argparse
 import base64
+import contextlib
 import hashlib
 import json
 import math
@@ -1898,12 +1899,18 @@ def process_batch_frame(make_client, timestamp: int, frame_path: Path,
     error, an unexpected client error (including timeouts), or an
     unwritable output — is captured as a failure result, so one frame can
     never abort or corrupt its siblings. ``make_client`` is a zero-argument
-    factory called inside the worker, so a live client is never shared
-    across threads. Only ``BaseException``s that must propagate (such as
+    context manager called inside the worker, so a live client is never
+    shared across threads and an internally created client is always
+    closed, whether the request succeeds or fails. A caller-injected
+    client is yielded without transferring ownership and is never closed.
+    Only ``BaseException``s that must propagate (such as
     ``KeyboardInterrupt``) escape this boundary.
     """
     try:
-        validated = analyze_frame(make_client(), frame_path, timestamp, api_key=api_key)
+        with make_client() as vision_client:
+            validated = analyze_frame(
+                vision_client, frame_path, timestamp, api_key=api_key
+            )
     except Exception as exc:
         return ("failed", str(exc))
     try:
@@ -1967,15 +1974,23 @@ def run_vision_batch(
         else:
             api_key = None
 
+        @contextlib.contextmanager
         def make_client():
             # Fresh client per frame: a live client is never shared across
-            # worker threads, and construction performs no I/O.
-            return OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL)
+            # worker threads, and construction performs no I/O. The context
+            # manager closes the client after its request finishes, whether
+            # the request, response processing, or validation succeeds or
+            # raises.
+            with OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL) as live_client:
+                yield live_client
     else:
         api_key = None
 
+        @contextlib.contextmanager
         def make_client():
-            return client
+            # Caller-owned client: yielded without taking ownership, so the
+            # worker must never close it.
+            yield client
 
     succeeded: list[Path] = []
     skipped: list[Path] = []

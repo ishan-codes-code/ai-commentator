@@ -46,7 +46,10 @@ earlier authorized live batch run.
     selected-frame order, never completion order. A live client is never
     shared across threads — each frame gets a fresh `OpenAI` client
     (installed SDK 3.41.0 states no thread-safety guarantee, so the design
-    does not depend on one; construction performs no I/O). Per-frame
+    does not depend on one; construction performs no I/O). Each internally
+    created client is closed after its request finishes, success or failure
+    (context-managed factory); caller-injected clients are never closed.
+    Per-frame
     failures, including unexpected client errors such as timeouts (real
     `APITimeoutError`s surface as `VisionAPIError` through the existing
     `APIError` mapping), are reported and the run continues; the final
@@ -177,16 +180,20 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
   `tests/test_vision_batch.py` + `tests/test_output_layout.py` +
   `tests/test_match_state.py` + `tests/test_event_detection.py` + new
   `tests/test_vision_jobs.py`):
-  **168 tests, all passed**, run inside Docker via the canonical
+  **172 tests, all passed**, run inside Docker via the canonical
   `docker compose run ... python -m unittest discover -s tests` command
   (escalated shell; sandbox user lacks daemon access). The 16 new jobs
   tests cover argument validation, jobs bounds, sequential/concurrent
   output identity, in-flight caps (barrier rendezvous, no wall-clock
   assertions), reverse completion order, error/timeout isolation, cache
   skip, `--force`, schema enforcement under concurrency, downstream
-  state/event identity, and `--jobs` CLI rules. First-run failures of the
+  state/event identity, `--jobs` CLI rules, and client lifecycle (internal
+  clients closed on success/request/validation failure, injected clients
+  never closed). First-run failures of the
   new tests were test-side only (fixture reads after temp-dir cleanup,
-  barrier parties not dividing frame counts); no product change was needed.
+  barrier parties not dividing frame counts, plus one stale-image run:
+  the container ran the pre-fix `main.py` until the image was rebuilt);
+  no product change was needed.
   Earlier milestone-5 first-run failures were likewise test- or
   fixture-side only; product fixes were limited to unifying rejected-file
   reporting, nearest-scope attribution, and sentence masking.
