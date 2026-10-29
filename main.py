@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import cv2
@@ -48,6 +49,8 @@ EVENT_ELIM_RE = re.compile(r"Elim\s+(\d+)")
 EVENT_TEAM_SCOPE_RE = re.compile(r"\bteam\s+([A-Za-z0-9_]+)", re.IGNORECASE)
 EVENT_TRIGGER_CONFIDENCES = ("high", "medium")
 DEFAULT_VISION_BATCH_LIMIT = 5
+DEFAULT_VISION_BATCH_JOBS = 1
+MAX_VISION_BATCH_JOBS = 4
 
 
 class ObservationError(ValueError):
@@ -322,6 +325,22 @@ def parse_limit_argument(value: str) -> int:
     if limit < 1:
         raise argparse.ArgumentTypeError(f"--limit must be at least 1, got {limit}.")
     return limit
+
+
+def parse_jobs_argument(value: str) -> int:
+    """Argparse type for ``--jobs``: an integer from 1 to MAX_VISION_BATCH_JOBS."""
+    try:
+        jobs = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"--jobs must be an integer from 1 to {MAX_VISION_BATCH_JOBS}, "
+            f"got {value!r}."
+        ) from None
+    if jobs < 1 or jobs > MAX_VISION_BATCH_JOBS:
+        raise argparse.ArgumentTypeError(
+            f"--jobs must be between 1 and {MAX_VISION_BATCH_JOBS}, got {jobs}."
+        )
+    return jobs
 
 
 def load_frame_image(frame_path: Path) -> tuple[bytes, str, int, int]:
@@ -1870,9 +1889,34 @@ def run_vision_test(
     print(f"Saved validated observation: {destination}")
 
 
+def process_batch_frame(make_client, timestamp: int, frame_path: Path,
+                         destination: Path, api_key: str | None = None) -> tuple[str, str]:
+    """Analyse one planned batch frame and atomically write its observation.
+
+    Returns ``("succeeded", destination)`` or ``("failed", reason)``. Every
+    per-frame failure — a missing, empty, or corrupt image, a provider
+    error, an unexpected client error (including timeouts), or an
+    unwritable output — is captured as a failure result, so one frame can
+    never abort or corrupt its siblings. ``make_client`` is a zero-argument
+    factory called inside the worker, so a live client is never shared
+    across threads. Only ``BaseException``s that must propagate (such as
+    ``KeyboardInterrupt``) escape this boundary.
+    """
+    try:
+        validated = analyze_frame(make_client(), frame_path, timestamp, api_key=api_key)
+    except Exception as exc:
+        return ("failed", str(exc))
+    try:
+        write_observation_json(destination, validated)
+    except OSError as exc:
+        return ("failed", f"could not write {destination}: {exc}")
+    return ("succeeded", str(destination))
+
+
 def run_vision_batch(
     limit: int = DEFAULT_VISION_BATCH_LIMIT,
     force: bool = False,
+    jobs: int = DEFAULT_VISION_BATCH_JOBS,
     client=None,
     directory: Path | None = None,
     observations_dir: Path | None = None,
@@ -1884,7 +1928,14 @@ def run_vision_batch(
     observation there are skipped unless ``force`` is set. Returns 0 only
     when every selected frame ends with a validated observation; any failure
     (or zero candidates) returns 1 after reporting the completed results.
+    ``jobs`` bounds how many vision requests run concurrently (1 means
+    sequential); results are always reported in selected-frame order, never
+    in request-completion order.
     """
+    if jobs < 1 or jobs > MAX_VISION_BATCH_JOBS:
+        raise ValueError(
+            f"jobs must be between 1 and {MAX_VISION_BATCH_JOBS}, got {jobs}."
+        )
     frames_dir = FRAMES_DIR if directory is None else Path(directory)
     obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
     warn_about_legacy_observations(frames_dir)
@@ -1913,16 +1964,51 @@ def run_vision_batch(
                 raise RuntimeError(
                     "BASETEN_API_KEY is not set in the container environment."
                 )
-            client = OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL)
         else:
             api_key = None
+
+        def make_client():
+            # Fresh client per frame: a live client is never shared across
+            # worker threads, and construction performs no I/O.
+            return OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL)
     else:
         api_key = None
+
+        def make_client():
+            return client
 
     succeeded: list[Path] = []
     skipped: list[Path] = []
     failed: list[tuple[Path, str]] = []
     total = len(planned)
+    work_items = [
+        (position, timestamp, frame_path, destination)
+        for position, (timestamp, frame_path, destination, cached) in enumerate(planned)
+        if not cached
+    ]
+    for position, _, frame_path, _ in work_items:
+        print(f"[{position + 1}/{total}] Analysing {frame_path} ...")
+    outcomes: dict[int, tuple[str, str]] = {}
+    if jobs == 1:
+        for position, timestamp, frame_path, destination in work_items:
+            outcomes[position] = process_batch_frame(
+                make_client, timestamp, frame_path, destination, api_key=api_key
+            )
+    else:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            pending = {
+                pool.submit(
+                    process_batch_frame,
+                    make_client,
+                    timestamp,
+                    frame_path,
+                    destination,
+                    api_key,
+                ): position
+                for position, timestamp, frame_path, destination in work_items
+            }
+            for future in as_completed(pending):
+                outcomes[pending[future]] = future.result()
     for index, (timestamp, frame_path, destination, cached) in enumerate(
         planned, start=1
     ):
@@ -1934,21 +2020,10 @@ def run_vision_batch(
             )
             skipped.append(destination)
             continue
-        print(f"[{index}/{total}] Analysing {frame_path} ...")
-        try:
-            validated = analyze_frame(client, frame_path, timestamp, api_key=api_key)
-        except (FileNotFoundError, ValueError, VisionAPIError) as exc:
-            print(f"Error [{frame_path.name}]: {exc}", file=sys.stderr)
-            failed.append((frame_path, str(exc)))
-            continue
-        try:
-            write_observation_json(destination, validated)
-        except OSError as exc:
-            print(
-                f"Error [{frame_path.name}]: could not write {destination}: {exc}",
-                file=sys.stderr,
-            )
-            failed.append((frame_path, str(exc)))
+        status, detail = outcomes[index - 1]
+        if status == "failed":
+            print(f"Error [{frame_path.name}]: {detail}", file=sys.stderr)
+            failed.append((frame_path, detail))
             continue
         print(f"Saved validated observation: {destination}")
         succeeded.append(destination)
@@ -2018,12 +2093,22 @@ if __name__ == "__main__":
         action="store_true",
         help="Re-analyse frames that already have a validated observation JSON.",
     )
+    parser.add_argument(
+        "--jobs",
+        type=parse_jobs_argument,
+        default=None,
+        metavar="J",
+        help="Maximum concurrent vision requests for --vision-batch "
+        f"(integer 1-{MAX_VISION_BATCH_JOBS}, default {DEFAULT_VISION_BATCH_JOBS}).",
+    )
     args = parser.parse_args()
 
     if args.limit is not None and not args.vision_batch:
         parser.error("--limit requires --vision-batch.")
     if args.force and not args.vision_batch:
         parser.error("--force requires --vision-batch.")
+    if args.jobs is not None and not args.vision_batch:
+        parser.error("--jobs requires --vision-batch.")
 
     if args.vision_test:
         run_vision_test()
@@ -2032,6 +2117,9 @@ if __name__ == "__main__":
             run_vision_batch(
                 limit=args.limit or DEFAULT_VISION_BATCH_LIMIT,
                 force=args.force,
+                jobs=args.jobs
+                if args.jobs is not None
+                else DEFAULT_VISION_BATCH_JOBS,
             )
         )
     elif args.migrate_observations:

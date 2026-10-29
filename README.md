@@ -24,8 +24,9 @@ docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
 
 # Analyse up to 5 frames spread across the clip (paid, one request
 # per analysed frame). Omit --limit to use the default of 5.
+# Append --jobs J (1-4, default 1) to bound concurrent vision requests.
 docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
-  commentator python main.py --vision-batch --limit 5
+  commentator python main.py --vision-batch --limit 5 --jobs 2
 
 # Move legacy observation JSONs from output/frames/ to
 # output/observations/ (offline, verified, idempotent).

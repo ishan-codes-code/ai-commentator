@@ -31,21 +31,31 @@ earlier authorized live batch run.
     API key is read from the `BASETEN_API_KEY` environment variable and
     redacted from error output. Server-side schema enforcement is
     unavailable for this model, so validation happens in code.
-  - Vision batch (`python main.py --vision-batch [--limit N] [--force]`):
+  - Vision batch (`python main.py --vision-batch [--limit N] [--force] [--jobs J]`):
     discovers existing `frame_<timestamp>.jpg` files (numeric-timestamp
     order), selects up to N spread across the clip (default 5, endpoints
     included; limit 1 selects the first frame), and runs each selected
     frame through the same shared vision pipeline as `--vision-test`
-    (`analyze_frame`). Each success writes one validated `observation-v1`
-    JSON into `output/observations/` via atomic temp-file replace; model
-    timestamps must match the source frame or the response is rejected.
-    Frames with an already-validated observation in the observations
-    directory are skipped unless `--force` is given. Per-frame failures
-    are reported and the run continues; the final summary prints
-    available/selected/succeeded/failed/skipped counts and the process
-    exits non-zero unless every selected frame has a validated observation.
-    No concurrency, retries, or combined output file. Legacy JSONs beside
+    (`analyze_frame`, via the `process_batch_frame` worker). Each success
+    writes one validated `observation-v1` JSON into `output/observations/`
+    via atomic temp-file replace; model timestamps must match the source
+    frame or the response is rejected. Frames with an already-validated
+    observation in the observations directory are skipped unless `--force`
+    is given. `--jobs` (default 1, max 4) bounds how many vision requests
+    run concurrently via `ThreadPoolExecutor`; reporting is reassembled in
+    selected-frame order, never completion order. A live client is never
+    shared across threads — each frame gets a fresh `OpenAI` client
+    (installed SDK 3.41.0 states no thread-safety guarantee, so the design
+    does not depend on one; construction performs no I/O). Per-frame
+    failures, including unexpected client errors such as timeouts (real
+    `APITimeoutError`s surface as `VisionAPIError` through the existing
+    `APIError` mapping), are reported and the run continues; the final
+    summary prints available/selected/succeeded/failed/skipped counts and
+    the process exits non-zero unless every selected frame has a validated
+    observation. No retries or combined output file. Legacy JSONs beside
     the frames only trigger a warning pointing at `--migrate-observations`.
+    Extraction interval is unchanged (`INTERVAL = 3`); no sampling stride
+    or intensity classifier was added.
   - Migration (`python main.py --migrate-observations`, offline): moves
     validated legacy `output/frames/frame_*.json` files to
     `output/observations/` with byte-copy + destination verification
@@ -85,7 +95,9 @@ earlier authorized live batch run.
   `.vscode/`.
 - `.dockerignore` — excludes `.venv`, caches, `.git`, `.env`, `output`,
   `gameplay` from the build context.
-- `README.md` — title only; real instructions live in `docs/`.
+- `README.md` — build, extraction, single-frame, batch (including `--jobs`),
+  migration, state rebuild, event detection, and offline test commands;
+  details live in `docs/`.
 - `.vscode/settings.json` — terminal uses the env file.
 
 ## How to build the Docker image
@@ -108,6 +120,9 @@ See [testing.md](testing.md) for the exact commands. In short:
 Live (paid, one request per analysed frame — run only with authorization):
 
 `docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" commentator python main.py --vision-batch --limit 5`
+
+Append `--jobs J` (1–4, default 1) to bound concurrent vision requests, e.g.
+`--vision-batch --limit 5 --jobs 2`. Sequential default behavior is unchanged.
 
 Offline checks (no API calls, see [testing.md](testing.md)): selection
 preview over the real frames, `--vision-batch --limit 1` skip-path run,
@@ -160,14 +175,26 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 
 - Unit suite (`tests/test_observation_schema.py` +
   `tests/test_vision_batch.py` + `tests/test_output_layout.py` +
-  `tests/test_match_state.py` + new `tests/test_event_detection.py`):
-  **152 tests, all passed**, run inside Docker via the canonical
+  `tests/test_match_state.py` + `tests/test_event_detection.py` + new
+  `tests/test_vision_jobs.py`):
+  **168 tests, all passed**, run inside Docker via the canonical
   `docker compose run ... python -m unittest discover -s tests` command
-  (escalated shell; sandbox user lacks daemon access). First-run failures
-  were test- or fixture-side only (uncreated fixture directory, reporting
-  split, over-strict scope matching, abbreviation dots splitting
-  sentences); product fixes were limited to unifying rejected-file
+  (escalated shell; sandbox user lacks daemon access). The 16 new jobs
+  tests cover argument validation, jobs bounds, sequential/concurrent
+  output identity, in-flight caps (barrier rendezvous, no wall-clock
+  assertions), reverse completion order, error/timeout isolation, cache
+  skip, `--force`, schema enforcement under concurrency, downstream
+  state/event identity, and `--jobs` CLI rules. First-run failures of the
+  new tests were test-side only (fixture reads after temp-dir cleanup,
+  barrier parties not dividing frame counts); no product change was needed.
+  Earlier milestone-5 first-run failures were likewise test- or
+  fixture-side only; product fixes were limited to unifying rejected-file
   reporting, nearest-scope attribution, and sentence masking.
+- Synthetic concurrency benchmark (`tests/benchmark_jobs.py`, fake
+  sleeping client, zero network): 5 uncached mocked requests complete in
+  **1.51s with `--jobs 1` vs 0.61s with `--jobs 4`**, with byte-identical
+  outputs. These numbers measure lock-step fake sleeps, not model latency,
+  and are not a production speedup claim.
 - Docker build: **passed** (`docker compose build`, exit 0).
 - Event detection on the real tree: **passed** — 5 discovered, 5 accepted,
   0 skipped, 0 rejected, **0 emitted**, 0 contested, exit 0. A rerun is
@@ -203,11 +230,14 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 ## Not implemented yet
 
 Commentary generation, TTS/audio playback, live capture, OBS integration,
-controlled sampling/concurrency, Free Fire knowledge pack. (Multi-frame
-runs, output separation, match-state tracking, and conservative event
-detection are implemented and verified.)
+Free Fire knowledge pack. (Multi-frame runs, output separation,
+match-state tracking, conservative event detection, and bounded batch
+concurrency are implemented and verified. Cosmetic note: worker-thread
+progress lines may interleave on stdout under `--jobs 2+`; the saved-file
+record and final summary always print deterministically from the main
+thread.)
 
 ## Recommended next milestone
 
-Roadmap milestone 6: choose sampling frequency and concurrency limits by
-documented experiment. See [roadmap.md](roadmap.md).
+Roadmap milestone 7: evidence-grounded commentary generation.
+See [roadmap.md](roadmap.md).

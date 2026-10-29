@@ -49,10 +49,28 @@ output writing, batch reporting, and single-frame compatibility via a fake
 API client (see `tests/test_vision_batch.py`); output-layout separation,
 legacy migration, and extraction (see `tests/test_output_layout.py`); and
 match-state validation, update semantics, determinism, and no-inference
-rules (see `tests/test_match_state.py`); and event validation, firing
+rules (see `tests/test_match_state.py`); event validation, firing
 rules, suppression cases, deduplication, determinism, and source
-preservation via fixtures (see `tests/test_event_detection.py`). Tests
-mount read-only into the container; no image change is needed to run them.
+preservation via fixtures (see `tests/test_event_detection.py`); and
+bounded concurrency — argument/bound validation, sequential/concurrent
+output identity, in-flight caps via barrier rendezvous, reverse completion
+order, error/timeout isolation, cache skip, `--force`, schema enforcement,
+downstream state/event identity, and `--jobs` CLI rules — via fake clients
+(see `tests/test_vision_jobs.py`). Tests mount read-only into the
+container; no image change is needed to run them. There are deliberately
+no wall-clock speed assertions in the suite; the synthetic
+sequential-vs-concurrent timing comparison lives in
+`tests/benchmark_jobs.py` (not collected by unittest discovery):
+
+```sh
+docker compose run --rm -v "$PWD/tests:/app/tests:ro" \
+  commentator python /app/tests/benchmark_jobs.py
+```
+
+It submits 5 uncached mocked requests with a fixed per-request sleep and
+reports elapsed time for `--jobs 1` versus `--jobs 4` plus an output-identity
+check. Its numbers are synthetic (fake sleeps, no network) and must not be
+quoted as a production speedup.
 
 ## Multi-frame vision batch (offline verification, no API calls)
 
@@ -68,6 +86,11 @@ docker compose run --rm commentator python -c \
 docker compose run --rm commentator python main.py --vision-batch --limit 1
 # Invalid limits fail fast with exit code 2 and no API call.
 docker compose run --rm commentator python main.py --vision-batch --limit 0
+# Invalid jobs values fail fast with exit code 2 and no API call.
+docker compose run --rm commentator python main.py --vision-batch --jobs 0 --limit 1
+docker compose run --rm commentator python main.py --vision-batch --jobs 5 --limit 1
+# --jobs without --vision-batch is rejected with exit code 2.
+docker compose run --rm commentator python main.py --jobs 2
 ```
 
 ## Multi-frame vision batch (live, paid)
@@ -80,7 +103,9 @@ docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
 Analyses up to 5 frames spread across the clip (default when `--limit` is
 omitted), saving one validated `observation-v1` JSON per frame in
 `output/observations/`. Frames with an already-validated observation are
-skipped unless `--force` is given. Any per-frame failure still reports the
+skipped unless `--force` is given. Append `--jobs J` (1–4, default 1) to
+bound concurrent vision requests; reporting stays in selected-frame order
+regardless of completion order. Any per-frame failure still reports the
 completed results but exits non-zero. This makes one paid request per
 analysed frame; run it only with explicit authorization, and never default
 to the full clip.
