@@ -29,9 +29,10 @@ acceptance criteria, and what is explicitly out of scope.
   documented.
 - **Out of scope:** tracking state across frames, commentary.
 - **Status:** complete. `--vision-batch` with spread selection, per-frame
-  validation, and failure reporting is implemented (198 unit tests pass in
+  validation, and failure reporting is implemented (219 unit tests pass in
   Docker, including the milestone-6 concurrency and client-lifecycle
-  suites and the milestone-7 commentary suite). The 5 stored live
+  suites, the milestone-7 commentary suite, and the milestone-8 writer
+  suite). The 5 stored live
   observations (timestamps 0, 48, 96, 147, 195)
   validate against `observation-v1` and were content-surveyed; failure modes
   are documented in `docs/current-state.md` and `docs/testing.md`.
@@ -74,7 +75,7 @@ acceptance criteria, and what is explicitly out of scope.
 - **Status:** complete. Sampling kept at the existing 3-second extraction
   interval (no stride or intensity classifier added — recorded video needs
   no live-stream queue). `--jobs` (default 1, hard max 4) bounds concurrent
-  vision requests on the batch path; 198 unit tests pass in Docker,
+  vision requests on the batch path; 219 unit tests pass in Docker,
   including barrier-rendezvous in-flight caps and reverse-completion-order
   identity, and a synthetic mocked benchmark (jobs=1: 1.51s vs jobs=4:
   0.61s for 5 fake requests, identical outputs) documents the bound choice.
@@ -97,16 +98,36 @@ acceptance criteria, and what is explicitly out of scope.
   refusal. Real-tree run: 9 development lines, then converging silence —
   documented as the honest result for the current evidence.
 
-## 8. Integrate TTS and audio playback
+## 8. Natural, evidence-grounded AI commentary
+
+- **Goal:** natural caster-style wording over the gated M7 claims, without
+  weakening evidence requirements.
+- **Dependencies:** milestones 2–7.
+- **Acceptance:** model-worded lines keep identity/provenance and pass
+  claim-level validation; unsupported lines fall back; provider failure
+  degrades to the deterministic run; no invented events on fixtures;
+  no live calls in tests.
+- **Out of scope:** audio output.
+- **Status:** complete. `--commentary-write` words prioritized claims
+  with one text-only model call (same endpoint/model, bounded prompt);
+  every line is re-validated (evidence containment, token closure,
+  verbatim qualifier) with per-line template fallback, and provider
+  trouble falls back to the full deterministic run. 21 fixture tests
+  cover valid output, malformed/unknown/unsupported lines, qualifier
+  enforcement, repetition, silence, API errors, missing keys, and CLI
+  wiring — all offline with fakes. Live writer runs remain opt-in and
+  unverified.
+
+## 9. Integrate TTS and audio playback
 
 - **Goal:** speak commentary locally.
-- **Dependencies:** milestone 7.
+- **Dependencies:** milestones 7–8.
 - **Acceptance:** text produces playable audio locally.
 - **Out of scope:** live capture, OBS.
 
-## 9. Integrate live capture and OBS output
+## 10. Integrate live capture and OBS output
 
 - **Goal:** move from recorded MP4 to live input with OBS audio routing.
-- **Dependencies:** milestones 6–8.
+- **Dependencies:** milestones 6–9.
 - **Acceptance:** live session produces routed commentary audio end to end.
 - **Out of scope:** (end of current plan).

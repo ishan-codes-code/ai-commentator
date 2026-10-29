@@ -63,7 +63,10 @@ and eventually OBS audio integration.
   `python main.py --generate-commentary` from validated observations,
   match state, and event candidates through deterministic templates;
   candidate echoes carry mandatory qualifiers, silence is explicit).
-  LM-based wording remains future work.
+  Natural wording via `python main.py --commentary-write` (one text-only
+  model call over gated claims, every line re-validated with template
+  fallback) is implemented, verified on fixtures with fakes only, and
+  opt-in; no live writer call has been made.
 
 ### 6. Text-to-speech
 

@@ -52,8 +52,8 @@ Each line object has exactly these fields:
 | `timestamp` | number | Latest supporting evidence timestamp — never wall-clock time |
 | `seq` | non-negative integer | Position within its timestamp, assigned in emission order |
 | `type` | `scene`, `development`, or `event_echo` | Claim kind (see "Templates") |
-| `template` | non-empty string | Template key that produced the text; must be listed in "Templates" |
-| `text` | non-empty string | The speakable sentence: a fixed template prefix plus verbatim validated strings only |
+| `template` | non-empty string | Gating template key for the claim; must be listed in "Templates". Names the precondition that justified the claim, not necessarily the wording path (writer-mode text is natural, not templated) |
+| `text` | non-empty string | The speakable sentence: a fixed template prefix plus verbatim validated strings (deterministic mode), or natural wording that still contains every evidence quote verbatim (writer mode) |
 | `sources` | non-empty array of source refs, sorted | Observation refs, each `{timestamp, file, fact_id}` with the fact present in state |
 | `event_id` | string or null | The candidate event id for `event_echo`; null otherwise |
 | `evidence` | non-empty array of non-empty strings | Quoted strings from the cited observations; each must occur verbatim in both the cited observation text and the line text |
@@ -119,12 +119,9 @@ Rules are evaluated in order; the first failure for a candidate emits one
 `suppressed` record and stops that candidate. Rule names are recorded in
 `rules_evaluated`.
 
-- `valid-inputs`: observations, state, and events each validate; the state
-  and the events' `generated_from` exactly cover the discovered
-  observations (stale snapshots refuse the run, mirroring
-  `--detect-events`).
 - `valid-inputs`: observations, state, and events each validate and the
-  state plus events exactly cover the discovered observations.
+  state plus events exactly cover the discovered observations (stale
+  snapshots refuse the run, mirroring `--detect-events`).
 - `stale-fact`: only `current` facts yield scene wording; stale facts are
   recorded, never spoken in the present tense.
 - `subsumed-by-development`: a scene twin of a development line for the
@@ -173,10 +170,13 @@ records too — otherwise silence would oscillate instead of converging.
 - Confirm candidates, resolve uncertainties, merge identities, interpret
   numbers, or infer movement, intent, kills, or outcomes.
 - Guarantee semantic faithfulness beyond its mechanical checks: the
-  checks bind wording to quoted evidence, but a future free-text
-  generator could still arrange true quotes misleadingly. That residual
-  risk is why M7 ships deterministic templates only; any LM wording path
-  must re-validate and is a review-gated addition, not a v1 capability.
+  checks bind wording to quoted evidence, but a free-text generator
+  could still arrange true quotes misleadingly. The writer mode (one
+  text-only model call over gated claims, every line re-validated with
+  per-line template fallback) narrows that risk to phrasing around
+  mandatory verbatim quotes; it does not eliminate it. No denied-phrase
+  list is used: substring blacklists both miss paraphrase and false-hit
+  on quoted evidence itself.
 - Write anywhere except `output/commentary/`; sources, state, and events
   are read-only inputs.
 

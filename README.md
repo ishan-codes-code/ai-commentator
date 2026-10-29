@@ -41,6 +41,14 @@ docker compose run --rm commentator python main.py --rebuild-state
 # (offline, no API calls).
 docker compose run --rm commentator python main.py --detect-events
 
+# Generate deterministic commentary into
+# output/commentary/commentary.json (offline, no API calls).
+docker compose run --rm commentator python main.py --generate-commentary
+
+# Word gated claims with one text-only model call (paid, opt-in).
+docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
+  commentator python main.py --commentary-write
+
 # Generate evidence-grounded commentary into
 # output/commentary/commentary.json (offline, no API calls).
 docker compose run --rm commentator python main.py --generate-commentary

@@ -105,6 +105,17 @@ earlier authorized live batch run.
     zero lines (deliberate silence); exit 1 on invalid inputs or write
     failure with the previous file intact. See
     `docs/contracts/commentary-v1.md`.
+  - Writer mode (`python main.py --commentary-write`, paid opt-in): runs
+    the same validate → gate → suppress pipeline, then words up to 6
+    prioritized claims (developments/echoes first) with one text-only
+    model call over gated claims plus the last 4 spoken lines — never raw
+    observations or full history. Every model line is re-validated
+    (evidence containment, token closure, verbatim qualifier) with
+    per-line template fallback; provider/parse failure falls back to the
+    full deterministic run with a warning, never a crash. Fresh client
+    per run (closed after); injected clients never closed; missing key
+    raises before any call. Silence makes no call. Same output contract,
+    same exit codes; `template` names the gating template in both modes.
 - `Dockerfile` — `python:3.12-slim`, installs `requirements.txt`, copies
   only `main.py` (M7 stayed in `main.py`, so no Docker change was needed),
   creates `/app/output/frames`, creates non-root user
@@ -120,7 +131,8 @@ earlier authorized live batch run.
 - `.dockerignore` — excludes `.venv`, caches, `.git`, `.env`, `output`,
   `gameplay` from the build context.
 - `README.md` — build, extraction, single-frame, batch (including `--jobs`),
-  migration, state rebuild, event detection, and offline test commands;
+  migration, state rebuild, event detection, commentary generation
+  (deterministic and writer modes), and offline test commands;
   details live in `docs/`.
 - `.vscode/settings.json` — terminal uses the env file.
 
@@ -164,6 +176,10 @@ All offline (see [testing.md](testing.md)):
 
 `docker compose run --rm commentator python main.py --generate-commentary`
 
+Live writer (paid, one text-only request — run only with authorization):
+
+`docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" commentator python main.py --commentary-write`
+
 ## Output directory layout
 
 - `output/frames/` — extracted JPEGs only (`frame_<timestamp>.jpg`).
@@ -203,8 +219,9 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 - Unit suite (`tests/test_observation_schema.py` +
   `tests/test_vision_batch.py` + `tests/test_output_layout.py` +
   `tests/test_match_state.py` + `tests/test_event_detection.py` +
-  `tests/test_vision_jobs.py` + new `tests/test_commentary.py`):
-  **198 tests, all passed**, run inside Docker via the canonical
+  `tests/test_vision_jobs.py` + `tests/test_commentary.py` + new
+  `tests/test_commentary_writer.py`):
+  **219 tests, all passed**, run inside Docker via the canonical
   `docker compose run ... python -m unittest discover -s tests` command
   (escalated shell; sandbox user lacks daemon access). The 26 new
   commentary tests cover scene/development/event-echo lines, qualifier
@@ -273,13 +290,14 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 TTS/audio playback, live capture, OBS integration,
 Free Fire knowledge pack. (Multi-frame runs, output separation,
 match-state tracking, conservative event detection, bounded batch
-concurrency, and evidence-grounded commentary are implemented and
-verified. Cosmetic note: worker-thread
+concurrency, evidence-grounded commentary, and the LLM writer path are
+implemented and verified (writer verified on fixtures with fakes only;
+no live writer call has been made). Cosmetic note: worker-thread
 progress lines may interleave on stdout under `--jobs 2+`; the saved-file
 record and final summary always print deterministically from the main
 thread.)
 
 ## Recommended next milestone
 
-Roadmap milestone 8: TTS and audio playback.
+Roadmap milestone 9: TTS and audio playback.
 See [roadmap.md](roadmap.md).

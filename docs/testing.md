@@ -58,7 +58,9 @@ order, error/timeout isolation, cache skip, `--force`, schema enforcement,
 downstream state/event identity, `--jobs` CLI rules, and client lifecycle
   (internally created clients closed on success/request/validation failure,
   injected clients never closed) — via fake clients
-(see `tests/test_vision_jobs.py`). Tests mount read-only into the
+(see `tests/test_vision_jobs.py`); and writer-mode wording, fallback,
+and claim validation via fake writer clients
+(see `tests/test_commentary_writer.py`). Tests mount read-only into the
 container; no image change is needed to run them. There are deliberately
 no wall-clock speed assertions in the suite; the synthetic
 sequential-vs-concurrent timing comparison lives in
@@ -183,6 +185,21 @@ file (missing = first run; malformed = warning + first run); only
 `current` facts, confident readings, and candidate events with clean
 sources can yield lines. Never makes network calls and never rewrites
 sources, state, or events.
+
+## Commentary writer (paid, opt-in)
+
+```sh
+docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
+  commentator python main.py --commentary-write
+```
+
+Words the gated claims with a single text-only model call (same endpoint
+and model as vision, no images), then validates every line and falls
+back per line — or fully, with a warning — to deterministic wording.
+Missing `BASETEN_API_KEY` fails fast before any call. All writer tests
+use fake clients (`tests/test_commentary_writer.py`); never run the
+writer to test it without explicit authorization, and never default to
+it in offline verification.
 
 ## Configuration and secret-handling checks
 
