@@ -24,6 +24,7 @@ from openai import APIError
 from main import (
     BASETEN_MODEL,
     DEFAULT_VISION_BATCH_LIMIT,
+    OBSERVATIONS_DIR,
     OBSERVATION_SCHEMA_VERSION,
     ObservationError,
     VisionAPIError,
@@ -32,6 +33,7 @@ from main import (
     ensure_observation_timestamp,
     extract_response_text,
     load_frame_image,
+    observation_path_for_frame,
     parse_frame_timestamp,
     parse_limit_argument,
     read_validated_observation,
@@ -153,6 +155,16 @@ def make_frames(directory, timestamps):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     return [write_jpeg(directory / f"frame_{ts:05d}.jpg") for ts in timestamps]
+
+
+def make_layout(root, timestamps):
+    """Mirror the real output layout: frames/ JPEGs plus an observations/ dir."""
+    root = Path(root)
+    frames = root / "frames"
+    obs = root / "observations"
+    obs.mkdir(parents=True, exist_ok=True)
+    make_frames(frames, timestamps)
+    return frames, obs
 
 
 def candidates_for(timestamps):
@@ -470,33 +482,32 @@ class ReadValidatedObservationTests(unittest.TestCase):
 class VisionBatchTests(unittest.TestCase):
     def test_success_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0, 3, 6, 9, 12, 15])
-            before_jpegs = sorted(path.name for path in directory.glob("*.jpg"))
-            selected = select_spread_frames(
-                discover_candidate_frames(directory), 3
-            )
+            frames, obs = make_layout(Path(tmp), [0, 3, 6, 9, 12, 15])
+            before_jpegs = sorted(path.name for path in frames.glob("*.jpg"))
+            selected = select_spread_frames(discover_candidate_frames(frames), 3)
             self.assertEqual([ts for ts, _ in selected], [0, 6, 15])
             client = FakeClient(
                 sequential_handler([observation_text(ts) for ts, _ in selected])
             )
             code, out, err = run_batch_capture(
-                limit=3, client=client, directory=directory
+                limit=3, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 0)
             self.assertEqual(err, "")
             self.assertEqual(len(client.calls), 3)
             for ts in (0, 6, 15):
                 doc = json.loads(
-                    (directory / f"frame_{ts:05d}.json").read_text(encoding="utf-8")
+                    (obs / f"frame_{ts:05d}.json").read_text(encoding="utf-8")
                 )
                 self.assertEqual(doc["timestamp"], ts)
                 self.assertEqual(doc["schema_version"], OBSERVATION_SCHEMA_VERSION)
             for ts in (3, 9, 12):
-                self.assertFalse((directory / f"frame_{ts:05d}.json").exists())
+                self.assertFalse((obs / f"frame_{ts:05d}.json").exists())
             self.assertEqual(
-                sorted(path.name for path in directory.glob("*.jpg")), before_jpegs
+                sorted(path.name for path in frames.glob("*.jpg")), before_jpegs
             )
+            # Separation: no observation JSON may land next to the JPEGs.
+            self.assertEqual(list(frames.glob("*.json")), [])
             self.assertIn(
                 "6 available, 3 selected, 3 succeeded, 0 failed, 0 skipped", out
             )
@@ -504,19 +515,19 @@ class VisionBatchTests(unittest.TestCase):
 
     def test_partial_failure_reporting(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0, 3, 6])
+            frames, obs = make_layout(Path(tmp), [0, 3, 6])
             steps = [observation_text(0), api_error("boom"), observation_text(6)]
             client = FakeClient(scripted_handler(steps))
             code, out, err = run_batch_capture(
-                limit=3, client=client, directory=directory
+                limit=3, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 1)
             self.assertEqual(len(client.calls), 3)
-            self.assertTrue((directory / "frame_00000.json").exists())
-            self.assertFalse((directory / "frame_00003.json").exists())
-            self.assertTrue((directory / "frame_00006.json").exists())
-            self.assertEqual(list(directory.glob("*.tmp")), [])
+            self.assertTrue((obs / "frame_00000.json").exists())
+            self.assertFalse((obs / "frame_00003.json").exists())
+            self.assertTrue((obs / "frame_00006.json").exists())
+            self.assertEqual(list(obs.glob("*.tmp")), [])
+            self.assertEqual(list(frames.glob("*.json")), [])
             self.assertIn("3 selected, 2 succeeded, 1 failed, 0 skipped", out)
             self.assertIn("output: ", out)
             self.assertIn("Vision batch status: partial failure.", out)
@@ -524,37 +535,36 @@ class VisionBatchTests(unittest.TestCase):
 
     def test_total_failure_status(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0, 3])
+            frames, obs = make_layout(Path(tmp), [0, 3])
             client = FakeClient(
                 scripted_handler([api_error("down"), api_error("down")])
             )
             code, out, _ = run_batch_capture(
-                limit=2, client=client, directory=directory
+                limit=2, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 1)
             self.assertIn("Vision batch status: failure.", out)
 
     def test_no_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
+            frames, obs = make_layout(Path(tmp), [])
             client = FakeClient(sequential_handler([]))
             code, _, err = run_batch_capture(
-                limit=5, client=client, directory=Path(tmp)
+                limit=5, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 1)
             self.assertIn("no frame_", err)
 
     def test_unrelated_outputs_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0, 3])
-            stray = directory / "notes.json"
+            frames, obs = make_layout(Path(tmp), [0, 3])
+            stray = obs / "notes.json"
             stray.write_text('{"keep": true}', encoding="utf-8")
-            other = directory / "frame_00003.json"
+            other = obs / "frame_00003.json"
             other.write_text("garbage-not-json", encoding="utf-8")
             client = FakeClient(sequential_handler([observation_text(0)]))
             code, _, _ = run_batch_capture(
-                limit=1, client=client, directory=directory
+                limit=1, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 0)
             self.assertEqual(stray.read_text(encoding="utf-8"), '{"keep": true}')
@@ -562,16 +572,15 @@ class VisionBatchTests(unittest.TestCase):
 
     def test_skips_validated_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0, 3, 6])
-            (directory / "frame_00003.json").write_text(
+            frames, obs = make_layout(Path(tmp), [0, 3, 6])
+            (obs / "frame_00003.json").write_text(
                 observation_text(3), encoding="utf-8"
             )
             client = FakeClient(
                 sequential_handler([observation_text(0), observation_text(6)])
             )
             code, out, _ = run_batch_capture(
-                limit=3, client=client, directory=directory
+                limit=3, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 0)
             self.assertEqual(len(client.calls), 2)
@@ -580,32 +589,34 @@ class VisionBatchTests(unittest.TestCase):
 
     def test_invalid_existing_is_reanalysed(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0])
-            (directory / "frame_00000.json").write_text(
+            frames, obs = make_layout(Path(tmp), [0])
+            (obs / "frame_00000.json").write_text(
                 observation_text(99), encoding="utf-8"
             )
             client = FakeClient(sequential_handler([observation_text(0)]))
             code, out, _ = run_batch_capture(
-                limit=1, client=client, directory=directory
+                limit=1, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 0)
             self.assertEqual(len(client.calls), 1)
             doc = json.loads(
-                (directory / "frame_00000.json").read_text(encoding="utf-8")
+                (obs / "frame_00000.json").read_text(encoding="utf-8")
             )
             self.assertEqual(doc["timestamp"], 0)
 
     def test_force_reanalyses_valid_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0])
-            (directory / "frame_00000.json").write_text(
+            frames, obs = make_layout(Path(tmp), [0])
+            (obs / "frame_00000.json").write_text(
                 observation_text(0), encoding="utf-8"
             )
             client = FakeClient(sequential_handler([observation_text(0)]))
             code, out, _ = run_batch_capture(
-                limit=1, force=True, client=client, directory=directory
+                limit=1,
+                force=True,
+                client=client,
+                directory=frames,
+                observations_dir=obs,
             )
             self.assertEqual(code, 0)
             self.assertEqual(len(client.calls), 1)
@@ -613,93 +624,150 @@ class VisionBatchTests(unittest.TestCase):
 
     def test_missing_api_key_without_client(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0])
+            frames, obs = make_layout(Path(tmp), [0])
             with patch.dict(os.environ, {"BASETEN_API_KEY": ""}):
                 with self.assertRaises(RuntimeError):
-                    quiet_call(run_vision_batch, limit=1, directory=directory)
+                    quiet_call(
+                        run_vision_batch,
+                        limit=1,
+                        directory=frames,
+                        observations_dir=obs,
+                    )
 
     def test_all_skipped_needs_no_key(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0])
-            (directory / "frame_00000.json").write_text(
+            frames, obs = make_layout(Path(tmp), [0])
+            (obs / "frame_00000.json").write_text(
                 observation_text(0), encoding="utf-8"
             )
             with patch.dict(os.environ, {"BASETEN_API_KEY": ""}):
-                code, out, _ = run_batch_capture(limit=1, directory=directory)
+                code, out, _ = run_batch_capture(
+                    limit=1, directory=frames, observations_dir=obs
+                )
             self.assertEqual(code, 0)
             self.assertIn("1 skipped", out)
 
     def test_corrupt_frame_recorded_as_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            make_frames(directory, [0])
-            (directory / "frame_00003.jpg").write_bytes(b"junk" * 100)
+            frames, obs = make_layout(Path(tmp), [0])
+            (frames / "frame_00003.jpg").write_bytes(b"junk" * 100)
             client = FakeClient(sequential_handler([observation_text(0)]))
             code, out, err = run_batch_capture(
-                limit=5, client=client, directory=directory
+                limit=5, client=client, directory=frames, observations_dir=obs
             )
             self.assertEqual(code, 1)
             self.assertEqual(len(client.calls), 1)
-            self.assertFalse((directory / "frame_00003.json").exists())
+            self.assertFalse((obs / "frame_00003.json").exists())
             self.assertIn("Error [frame_00003.jpg]", err)
             self.assertIn("partial failure", out)
+
+    def test_legacy_files_warn_but_do_not_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            frames, obs = make_layout(Path(tmp), [0])
+            legacy = frames / "frame_00009.json"
+            legacy.write_bytes(observation_text(9).encode("utf-8"))
+            client = FakeClient(sequential_handler([observation_text(0)]))
+            code, out, err = run_batch_capture(
+                limit=1, client=client, directory=frames, observations_dir=obs
+            )
+            self.assertEqual(code, 0)
+            self.assertIn("legacy observation", err)
+            self.assertIn("migrate-observations", err)
+            # The legacy file is untouched; the new output went to obs/.
+            self.assertTrue(legacy.is_file())
+            self.assertTrue((obs / "frame_00000.json").exists())
+            self.assertEqual(list(frames.glob("*.json")), [legacy])
 
 
 class SingleFrameCompatibilityTests(unittest.TestCase):
     def test_success_writes_frame_00000_json(self):
         with tempfile.TemporaryDirectory() as tmp:
-            frame = write_jpeg(Path(tmp) / "frame_00000.jpg")
+            root = Path(tmp)
+            frame = write_jpeg(root / "frame_00000.jpg")
+            obs = root / "observations"
             client = FakeClient(sequential_handler([observation_text(0)]))
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                run_vision_test(client=client, frame_path=frame)
+                run_vision_test(
+                    client=client, frame_path=frame, observations_dir=obs
+                )
             self.assertEqual(err.getvalue(), "")
             self.assertIn('"schema_version": "observation-v1"', out.getvalue())
             self.assertIn("Saved validated observation: ", out.getvalue())
+            self.assertIn(str(obs / "frame_00000.json"), out.getvalue())
             doc = json.loads(
-                (Path(tmp) / "frame_00000.json").read_text(encoding="utf-8")
+                (obs / "frame_00000.json").read_text(encoding="utf-8")
             )
             self.assertEqual(doc["timestamp"], 0)
+            # Separation: nothing is written next to the JPEG.
+            self.assertEqual(list(root.glob("frame_*.json")), [])
 
     def test_api_error_exits_1_without_output(self):
         with tempfile.TemporaryDirectory() as tmp:
-            frame = write_jpeg(Path(tmp) / "frame_00000.jpg")
+            root = Path(tmp)
+            frame = write_jpeg(root / "frame_00000.jpg")
+            obs = root / "observations"
             client = FakeClient(scripted_handler([api_error("boom")]))
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 with self.assertRaises(SystemExit) as ctx:
-                    run_vision_test(client=client, frame_path=frame)
+                    run_vision_test(
+                        client=client, frame_path=frame, observations_dir=obs
+                    )
             self.assertEqual(ctx.exception.code, 1)
             self.assertIn("Baseten API", err.getvalue())
-            self.assertFalse((Path(tmp) / "frame_00000.json").exists())
+            self.assertFalse((obs / "frame_00000.json").exists())
 
     def test_invalid_observation_exits_1_without_output(self):
         with tempfile.TemporaryDirectory() as tmp:
-            frame = write_jpeg(Path(tmp) / "frame_00000.jpg")
+            root = Path(tmp)
+            frame = write_jpeg(root / "frame_00000.jpg")
+            obs = root / "observations"
             client = FakeClient(sequential_handler(["not json"]))
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 with self.assertRaises(SystemExit) as ctx:
-                    run_vision_test(client=client, frame_path=frame)
+                    run_vision_test(
+                        client=client, frame_path=frame, observations_dir=obs
+                    )
             self.assertEqual(ctx.exception.code, 1)
             self.assertIn("Invalid observation", err.getvalue())
-            self.assertFalse((Path(tmp) / "frame_00000.json").exists())
+            self.assertFalse((obs / "frame_00000.json").exists())
 
     def test_missing_key_without_client(self):
         with tempfile.TemporaryDirectory() as tmp:
-            frame = write_jpeg(Path(tmp) / "frame_00000.jpg")
+            root = Path(tmp)
+            frame = write_jpeg(root / "frame_00000.jpg")
             with patch.dict(os.environ, {"BASETEN_API_KEY": ""}):
                 with self.assertRaises(RuntimeError):
-                    quiet_call(run_vision_test, frame_path=frame)
+                    quiet_call(
+                        run_vision_test,
+                        frame_path=frame,
+                        observations_dir=root / "observations",
+                    )
 
     def test_unparseable_frame_name_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
-            frame = write_jpeg(Path(tmp) / "frame_xyz.jpg")
+            root = Path(tmp)
+            frame = write_jpeg(root / "frame_xyz.jpg")
             client = FakeClient(sequential_handler([observation_text(0)]))
             with self.assertRaises(RuntimeError):
-                quiet_call(run_vision_test, client=client, frame_path=frame)
+                quiet_call(
+                    run_vision_test,
+                    client=client,
+                    frame_path=frame,
+                    observations_dir=root / "observations",
+                )
+
+    def test_destination_mapping(self):
+        self.assertEqual(
+            observation_path_for_frame("frame_00048.jpg", Path("/o")),
+            Path("/o/frame_00048.json"),
+        )
+        self.assertEqual(
+            observation_path_for_frame(Path("a/b/frame_00003.jpg")),
+            OBSERVATIONS_DIR / "frame_00003.json",
+        )
 
 
 if __name__ == "__main__":

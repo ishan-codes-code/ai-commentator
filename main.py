@@ -1,5 +1,6 @@
 import argparse
 import base64
+import hashlib
 import json
 import math
 import mimetypes
@@ -14,16 +15,38 @@ import numpy as np
 from openai import APIError, OpenAI
 
 VIDEO_PATH = Path("gameplay/match.mp4")
-OUTPUT_DIR = Path("output/frames")
-VISION_FRAME_PATH = OUTPUT_DIR / "frame_00000.jpg"
+# Output layout: extracted JPEGs live under FRAMES_DIR; generated JSON
+# (per-frame observations and the rolling match-state snapshot) lives under
+# OBSERVATIONS_DIR. The two trees share frame-based basenames
+# (frame_<timestamp>.jpg <-> frame_<timestamp>.json) but never mix.
+FRAMES_DIR = Path("output/frames")
+OBSERVATIONS_DIR = Path("output/observations")
+MATCH_STATE_FILENAME = "match_state.json"
+MATCH_STATE_PATH = OBSERVATIONS_DIR / MATCH_STATE_FILENAME
+VISION_FRAME_PATH = FRAMES_DIR / "frame_00000.jpg"
 INTERVAL = 3
 BASETEN_BASE_URL = "https://inference.baseten.co/v1"
 BASETEN_MODEL = "meta-models/muse-spark-open-1026"
 OBSERVATION_SCHEMA_VERSION = "observation-v1"
 OBSERVATION_CATEGORIES = ("environment", "character", "hud", "combat", "other")
 OBSERVATION_CONFIDENCES = ("high", "medium", "low")
-OBSERVATION_OUTPUT_PATH = VISION_FRAME_PATH.with_suffix(".json")
+OBSERVATION_OUTPUT_PATH = OBSERVATIONS_DIR / "frame_00000.json"
 FRAME_FILENAME_RE = re.compile(r"^frame_(\d+)\.jpg$")
+OBSERVATION_FILENAME_RE = re.compile(r"^frame_(\d+)\.json$")
+MATCH_STATE_SCHEMA_VERSION = "match-state-v1"
+MATCH_STATE_STATUSES = ("current", "stale", "conflicted")
+MATCH_STATE_CHANGE_KINDS = ("new_fact", "update")
+EVENTS_DIR = Path("output/events")
+EVENTS_FILENAME = "events.json"
+EVENTS_PATH = EVENTS_DIR / EVENTS_FILENAME
+EVENT_SCHEMA_VERSION = "events-v1"
+EVENT_STATUSES = ("candidate",)
+EVENT_RULES = ("kill_feed_entry", "elim_count_increased")
+EVENT_FEED_MENTIONS = ("kill feed", "killfeed", "elimination feed", "elim feed")
+EVENT_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_]+")
+EVENT_ELIM_RE = re.compile(r"Elim\s+(\d+)")
+EVENT_TEAM_SCOPE_RE = re.compile(r"\bteam\s+([A-Za-z0-9_]+)", re.IGNORECASE)
+EVENT_TRIGGER_CONFIDENCES = ("high", "medium")
 DEFAULT_VISION_BATCH_LIMIT = 5
 
 
@@ -208,6 +231,86 @@ def select_spread_frames(
     return [candidates[round(i * last / (limit - 1))] for i in range(limit)]
 
 
+def observation_path_for_frame(
+    frame_path, observations_dir: Path | None = None
+) -> Path:
+    """Return the observation JSON path for a frame JPEG.
+
+    Maps ``frame_<timestamp>.jpg`` in the frames tree to
+    ``frame_<timestamp>.json`` in the observations tree. ``frame_path`` may
+    be a bare filename; ``observations_dir`` defaults to OBSERVATIONS_DIR
+    and exists so tests can point at fixture directories.
+    """
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    return obs_dir / (Path(frame_path).stem + ".json")
+
+
+def parse_observation_timestamp(name: str) -> int | None:
+    """Return the numeric timestamp for an observation filename, else None.
+
+    Matches only the ``frame_<timestamp>.json`` naming; anything else
+    (including the ``match_state.json`` snapshot) is not a stored
+    observation.
+    """
+    match = OBSERVATION_FILENAME_RE.match(name)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def discover_observation_files(directory: Path) -> list[tuple[int, Path]]:
+    """List ``(timestamp, path)`` for stored observation JSONs, sorted.
+
+    Sorting is numeric by filename timestamp. The state snapshot and
+    unrelated files never match the frame-based naming and are ignored; a
+    missing directory yields no candidates.
+    """
+    if not directory.is_dir():
+        return []
+    candidates = []
+    for entry in directory.iterdir():
+        if not entry.is_file():
+            continue
+        timestamp = parse_observation_timestamp(entry.name)
+        if timestamp is not None:
+            candidates.append((timestamp, entry))
+    candidates.sort(key=lambda item: item[0])
+    return candidates
+
+
+def find_legacy_observations(frames_dir: Path | None = None) -> list[Path]:
+    """List observation JSONs still stored alongside frames (legacy layout).
+
+    These are leftovers from before observations moved to OBSERVATIONS_DIR;
+    see :func:`migrate_observations`. Sorted by numeric timestamp.
+    """
+    directory = FRAMES_DIR if frames_dir is None else Path(frames_dir)
+    if not directory.is_dir():
+        return []
+    legacy = [
+        entry
+        for entry in directory.iterdir()
+        if entry.is_file() and parse_observation_timestamp(entry.name) is not None
+    ]
+    legacy.sort(key=lambda path: parse_observation_timestamp(path.name))
+    return legacy
+
+
+def warn_about_legacy_observations(frames_dir: Path | None = None) -> None:
+    """Print a non-blocking pointer to --migrate-observations when needed."""
+    legacy = find_legacy_observations(frames_dir)
+    if legacy:
+        names = ", ".join(path.name for path in legacy[:5])
+        extra = f" and {len(legacy) - 5} more" if len(legacy) > 5 else ""
+        print(
+            f"Warning: {len(legacy)} legacy observation file(s) in the frames "
+            f"directory ({names}{extra}); run "
+            f"'python main.py --migrate-observations' to move them to the "
+            f"observations directory.",
+            file=sys.stderr,
+        )
+
+
 def parse_limit_argument(value: str) -> int:
     """Argparse type for ``--limit``: a positive integer, else a CLI error."""
     try:
@@ -342,14 +445,14 @@ def analyze_frame(
     )
 
 
-def write_observation_json(destination: Path, validated: dict) -> None:
-    """Atomically write validated observation JSON (UTF-8, indented).
+def write_json_atomic(destination: Path, data: dict) -> None:
+    """Atomically write a JSON document (UTF-8, indented, trailing newline).
 
     The document is written to a temporary file in the destination directory
     and moved over the target only after the write succeeds, so a failure
     never leaves a partially written JSON file behind.
     """
-    rendered = json.dumps(validated, indent=2, ensure_ascii=False) + "\n"
+    rendered = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -363,10 +466,162 @@ def write_observation_json(destination: Path, validated: dict) -> None:
             tmp_path = Path(tmp.name)
             tmp.write(rendered)
         os.replace(tmp_path, destination)
+        tmp_path = None
     except BaseException:
         if tmp_path is not None:
             tmp_path.unlink(missing_ok=True)
         raise
+
+
+def write_observation_json(destination: Path, validated: dict) -> None:
+    """Atomically write a validated observation JSON document."""
+    write_json_atomic(destination, validated)
+
+
+def write_match_state(destination: Path, state: dict) -> None:
+    """Atomically write a validated match-state snapshot."""
+    write_json_atomic(destination, state)
+
+
+def copy_verified(source: Path, destination: Path) -> None:
+    """Byte-copy a file via temp+replace, verifying the destination bytes.
+
+    The source is never modified. Raises on any failure without leaving a
+    partial or corrupt destination file behind.
+    """
+    data = source.read_bytes()
+    tmp_path = None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=destination.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            tmp.write(data)
+        os.replace(tmp_path, destination)
+        tmp_path = None
+        if destination.read_bytes() != data:
+            destination.unlink()
+            raise OSError(f"verification read mismatch for {destination}")
+    except BaseException:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def migrate_observations(
+    frames_dir: Path | None = None, observations_dir: Path | None = None
+) -> dict:
+    """Move legacy observation JSONs out of the frames directory.
+
+    Each ``frame_<timestamp>.json`` under the frames directory is validated
+    (schema plus filename timestamp); valid files are byte-copied to the
+    observations directory and the source is removed only after the
+    destination verifies byte-identical. Byte-identical duplicates already
+    stored are removed as verified copies. Conflicting destinations and
+    invalid files are left in place and reported — never overwritten,
+    deleted, or discarded. Idempotent: re-running a completed migration
+    reports no remaining files.
+
+    Returns a summary dict with ``moved``, ``removed_duplicates``,
+    ``conflicts``, ``invalid``, and ``errors`` filename lists.
+    """
+    src_dir = FRAMES_DIR if frames_dir is None else Path(frames_dir)
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    summary = {
+        "moved": [],
+        "removed_duplicates": [],
+        "conflicts": [],
+        "invalid": [],
+        "errors": [],
+    }
+    for legacy_path in find_legacy_observations(src_dir):
+        timestamp = parse_observation_timestamp(legacy_path.name)
+        if read_validated_observation(legacy_path, timestamp) is None:
+            summary["invalid"].append(legacy_path.name)
+            continue
+        destination = obs_dir / legacy_path.name
+        try:
+            source_bytes = legacy_path.read_bytes()
+        except OSError as exc:
+            summary["errors"].append(f"{legacy_path.name}: {exc}")
+            continue
+        if destination.is_file():
+            try:
+                identical = destination.read_bytes() == source_bytes
+            except OSError as exc:
+                summary["errors"].append(f"{destination.name}: {exc}")
+                continue
+            if identical:
+                try:
+                    legacy_path.unlink()
+                except OSError as exc:
+                    summary["errors"].append(f"{legacy_path.name}: {exc}")
+                    continue
+                summary["removed_duplicates"].append(legacy_path.name)
+            else:
+                summary["conflicts"].append(legacy_path.name)
+            continue
+        try:
+            copy_verified(legacy_path, destination)
+            legacy_path.unlink()
+        except OSError as exc:
+            summary["errors"].append(f"{legacy_path.name}: {exc}")
+            continue
+        summary["moved"].append(legacy_path.name)
+    return summary
+
+
+def run_migration(
+    frames_dir: Path | None = None, observations_dir: Path | None = None
+) -> int:
+    """Run the legacy-observation migration; return a process exit code.
+
+    Exit 0 only when no legacy observation files remain; otherwise reports
+    what still needs attention and exits 1. Safe to re-run.
+    """
+    summary = migrate_observations(frames_dir, observations_dir)
+    src_dir = FRAMES_DIR if frames_dir is None else Path(frames_dir)
+    for name in summary["moved"]:
+        print(f"  moved: {name}")
+    for name in summary["removed_duplicates"]:
+        print(f"  removed verified duplicate: {name}")
+    for name in summary["conflicts"]:
+        print(
+            f"  conflict (left in place): {name} — destination already holds "
+            f"different content; resolve manually.",
+            file=sys.stderr,
+        )
+    for name in summary["invalid"]:
+        print(
+            f"  invalid (left in place): {name} — does not validate; "
+            f"inspect or remove manually.",
+            file=sys.stderr,
+        )
+    for detail in summary["errors"]:
+        print(f"  error: {detail}", file=sys.stderr)
+    remaining = [path.name for path in find_legacy_observations(src_dir)]
+    print(
+        f"Migration finished: {len(summary['moved'])} moved, "
+        f"{len(summary['removed_duplicates'])} verified duplicates removed, "
+        f"{len(summary['conflicts'])} conflicts, "
+        f"{len(summary['invalid'])} invalid, "
+        f"{len(summary['errors'])} errors, "
+        f"{len(remaining)} legacy file(s) remaining."
+    )
+    if remaining:
+        print(
+            "Migration incomplete: legacy observation files remain in the "
+            "frames directory (listed above).",
+            file=sys.stderr,
+        )
+        return 1
+    print("Migration complete: no legacy observation files remain.")
+    return 0
 
 
 def read_validated_observation(path: Path, expected_timestamp: int) -> dict | None:
@@ -389,11 +644,1144 @@ def read_validated_observation(path: Path, expected_timestamp: int) -> dict | No
         return None
 
 
+def observation_sha256(validated: dict) -> str:
+    """Hex digest of a validated observation's canonical JSON form."""
+    canonical = json.dumps(
+        validated, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def fact_key(category: str, description: str) -> tuple[str, str]:
+    """Identity of a match-state fact shared by the tracker and detector.
+
+    The exact ``(category, description)`` pair after stripping surrounding
+    whitespace — no fuzzy matching, no name parsing, no cross-category
+    merging. A reworded claim is a different fact.
+    """
+    return (category, description.strip())
+
+
+def new_match_state_builder() -> dict:
+    """Return an empty working builder for match-state construction.
+
+    The builder carries private bookkeeping (``_seen``, ``_contested``) that
+    :func:`finalize_match_state` strips; only the finalized document
+    conforms to ``match-state-v1``.
+    """
+    return {
+        "schema_version": MATCH_STATE_SCHEMA_VERSION,
+        "latest_timestamp": None,
+        "sources": [],
+        "facts": {},
+        "changes": [],
+        "conflicts": [],
+        "uncertainties": {},
+        "_seen": {},
+        "_contested": set(),
+    }
+
+
+def validate_match_state(data: dict) -> dict:
+    """Strictly validate a match-state-v1 document; reject anything else."""
+    if not isinstance(data, dict):
+        raise ObservationError("Match state must be a JSON object.")
+    _reject_extra(
+        data,
+        (
+            "schema_version",
+            "latest_timestamp",
+            "sources",
+            "facts",
+            "changes",
+            "conflicts",
+            "uncertainties",
+        ),
+        "Match state",
+    )
+    if data.get("schema_version") != MATCH_STATE_SCHEMA_VERSION:
+        raise ObservationError(
+            "Match state requires schema_version "
+            f"'{MATCH_STATE_SCHEMA_VERSION}'."
+        )
+    latest = data.get("latest_timestamp")
+    if latest is not None and (
+        isinstance(latest, bool)
+        or not isinstance(latest, (int, float))
+        or (isinstance(latest, float) and not math.isfinite(latest))
+    ):
+        raise ObservationError("Match state field 'latest_timestamp' must be "
+                               "a number or null.")
+    for field in ("sources", "facts", "changes", "conflicts", "uncertainties"):
+        if field not in data or not isinstance(data[field], list):
+            raise ObservationError(
+                f"Match state requires field '{field}' as a list."
+            )
+    for index, source in enumerate(data["sources"]):
+        where = f"sources[{index}]"
+        if not isinstance(source, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            source,
+            ("timestamp", "file", "observations", "uncertainties", "sha256"),
+            where,
+        )
+        timestamp = source.get("timestamp")
+        if (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or (isinstance(timestamp, float) and not math.isfinite(timestamp))
+        ):
+            raise ObservationError(f"{where} field 'timestamp' must be a number.")
+        _require_non_empty_string(source, "file", where)
+        for count_field in ("observations", "uncertainties"):
+            count = source.get(count_field)
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+            ):
+                raise ObservationError(
+                    f"{where} field '{count_field}' must be a non-negative integer."
+                )
+        _require_non_empty_string(source, "sha256", where)
+    for index, fact in enumerate(data["facts"]):
+        where = f"facts[{index}]"
+        if not isinstance(fact, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            fact,
+            (
+                "id",
+                "category",
+                "description",
+                "confidence",
+                "evidence",
+                "first_seen",
+                "last_seen",
+                "last_source",
+                "status",
+                "history",
+            ),
+            where,
+        )
+        _require_non_empty_string(fact, "id", where)
+        if fact.get("category") not in OBSERVATION_CATEGORIES:
+            raise ObservationError(
+                f"{where} has unsupported category '{fact.get('category')}'."
+            )
+        _require_non_empty_string(fact, "description", where)
+        if fact.get("confidence") not in OBSERVATION_CONFIDENCES:
+            raise ObservationError(
+                f"{where} has invalid confidence '{fact.get('confidence')}'."
+            )
+        _require_non_empty_string(fact, "evidence", where)
+        for seen_field in ("first_seen", "last_seen"):
+            seen = fact.get(seen_field)
+            if (
+                isinstance(seen, bool)
+                or not isinstance(seen, (int, float))
+                or (isinstance(seen, float) and not math.isfinite(seen))
+            ):
+                raise ObservationError(f"{where} field '{seen_field}' must be a number.")
+        if fact["first_seen"] > fact["last_seen"]:
+            raise ObservationError(
+                f"{where} has first_seen after last_seen."
+            )
+        _require_non_empty_string(fact, "last_source", where)
+        if fact.get("status") not in MATCH_STATE_STATUSES:
+            raise ObservationError(
+                f"{where} has invalid status '{fact.get('status')}'."
+            )
+        if "history" not in fact or not isinstance(fact["history"], list):
+            raise ObservationError(f"{where} requires field 'history' as a list.")
+        for entry_index, entry in enumerate(fact["history"]):
+            entry_where = f"{where}.history[{entry_index}]"
+            if not isinstance(entry, dict):
+                raise ObservationError(f"{entry_where} must be an object.")
+            _reject_extra(
+                entry, ("timestamp", "source", "confidence", "evidence"), entry_where
+            )
+            entry_ts = entry.get("timestamp")
+            if (
+                isinstance(entry_ts, bool)
+                or not isinstance(entry_ts, (int, float))
+                or (isinstance(entry_ts, float) and not math.isfinite(entry_ts))
+            ):
+                raise ObservationError(
+                    f"{entry_where} field 'timestamp' must be a number."
+                )
+            _require_non_empty_string(entry, "source", entry_where)
+            if entry.get("confidence") not in OBSERVATION_CONFIDENCES:
+                raise ObservationError(
+                    f"{entry_where} has invalid confidence "
+                    f"'{entry.get('confidence')}'."
+                )
+            _require_non_empty_string(entry, "evidence", entry_where)
+    for index, change in enumerate(data["changes"]):
+        where = f"changes[{index}]"
+        if not isinstance(change, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            change, ("timestamp", "kind", "fact_id", "detail", "source"), where
+        )
+        change_ts = change.get("timestamp")
+        if (
+            isinstance(change_ts, bool)
+            or not isinstance(change_ts, (int, float))
+            or (isinstance(change_ts, float) and not math.isfinite(change_ts))
+        ):
+            raise ObservationError(f"{where} field 'timestamp' must be a number.")
+        if change.get("kind") not in MATCH_STATE_CHANGE_KINDS:
+            raise ObservationError(
+                f"{where} has invalid kind '{change.get('kind')}'."
+            )
+        _require_non_empty_string(change, "fact_id", where)
+        _require_non_empty_string(change, "detail", where)
+        _require_non_empty_string(change, "source", where)
+    for index, conflict in enumerate(data["conflicts"]):
+        where = f"conflicts[{index}]"
+        if not isinstance(conflict, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(conflict, ("timestamp", "sources", "detail"), where)
+        conflict_ts = conflict.get("timestamp")
+        if (
+            isinstance(conflict_ts, bool)
+            or not isinstance(conflict_ts, (int, float))
+            or (isinstance(conflict_ts, float) and not math.isfinite(conflict_ts))
+        ):
+            raise ObservationError(f"{where} field 'timestamp' must be a number.")
+        sources = conflict.get("sources")
+        if (
+            not isinstance(sources, list)
+            or len(sources) < 2
+            or any(not isinstance(item, str) or not item.strip() for item in sources)
+        ):
+            raise ObservationError(
+                f"{where} requires 'sources' as a list of at least two "
+                f"non-empty strings."
+            )
+        _require_non_empty_string(conflict, "detail", where)
+    for index, uncertainty in enumerate(data["uncertainties"]):
+        where = f"uncertainties[{index}]"
+        if not isinstance(uncertainty, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            uncertainty,
+            ("text", "first_seen", "last_seen", "sources", "resolved"),
+            where,
+        )
+        _require_non_empty_string(uncertainty, "text", where)
+        for seen_field in ("first_seen", "last_seen"):
+            seen = uncertainty.get(seen_field)
+            if (
+                isinstance(seen, bool)
+                or not isinstance(seen, (int, float))
+                or (isinstance(seen, float) and not math.isfinite(seen))
+            ):
+                raise ObservationError(f"{where} field '{seen_field}' must be a number.")
+        if uncertainty["first_seen"] > uncertainty["last_seen"]:
+            raise ObservationError(
+                f"{where} has first_seen after last_seen."
+            )
+        sources = uncertainty.get("sources")
+        if (
+            not isinstance(sources, list)
+            or not sources
+            or any(not isinstance(item, str) or not item.strip() for item in sources)
+        ):
+            raise ObservationError(
+                f"{where} requires 'sources' as a non-empty list of strings."
+            )
+        if not isinstance(uncertainty.get("resolved"), bool):
+            raise ObservationError(f"{where} field 'resolved' must be a boolean.")
+    return data
+
+
+def apply_observation(builder: dict, validated: dict, source_name: str) -> str:
+    """Fold one validated observation into a working match-state builder.
+
+    Fact identity is the exact ``(category, description)`` pair — no fuzzy
+    matching, no name parsing, no cross-category merging. Returns
+    ``"applied"``, ``"duplicate"`` (same timestamp and content already
+    processed — a no-op), or ``"conflict"`` (same timestamp, different
+    content — both provenances preserved, neither silently chosen).
+    """
+    timestamp = validated["timestamp"]
+    digest = observation_sha256(validated)
+    seen = builder["_seen"].setdefault(timestamp, {"digests": set(), "sources": []})
+    if digest in seen["digests"]:
+        return "duplicate"
+    # A conflict needs two distinct provenances: the same source restating
+    # changed content is applied as an ordinary update, not a conflict.
+    contested = bool(seen["digests"]) and len(set(seen["sources"]) | {source_name}) >= 2
+    if contested:
+        builder["_contested"].add(timestamp)
+        existing = next(
+            (
+                entry
+                for entry in builder["conflicts"]
+                if entry["timestamp"] == timestamp
+            ),
+            None,
+        )
+        merged = sorted(set(seen["sources"]) | {source_name})
+        if existing is None:
+            builder["conflicts"].append(
+                {
+                    "timestamp": timestamp,
+                    "sources": merged,
+                    "detail": (
+                        f"Divergent observations for timestamp {timestamp!r}: "
+                        f"{', '.join(merged)}."
+                    ),
+                }
+            )
+        else:
+            existing["sources"] = sorted(set(existing["sources"]) | {source_name})
+            existing["detail"] = (
+                f"Divergent observations for timestamp {timestamp!r}: "
+                f"{', '.join(existing['sources'])}."
+            )
+    seen["digests"].add(digest)
+    seen["sources"].append(source_name)
+    builder["sources"].append(
+        {
+            "timestamp": timestamp,
+            "file": source_name,
+            "observations": len(validated["observations"]),
+            "uncertainties": len(validated["uncertainties"]),
+            "sha256": digest,
+        }
+    )
+    if builder["latest_timestamp"] is None or timestamp > builder["latest_timestamp"]:
+        builder["latest_timestamp"] = timestamp
+    for item in validated["observations"]:
+        key = fact_key(item["category"], item["description"])
+        fact = builder["facts"].get(key)
+        if fact is None:
+            fact = {
+                "category": item["category"],
+                "description": item["description"].strip(),
+                "sightings": [],
+            }
+            builder["facts"][key] = fact
+            builder["changes"].append(
+                {
+                    "timestamp": timestamp,
+                    "kind": "new_fact",
+                    "key": key,
+                    "detail": f"First observed ({item['category']}): "
+                    f"{item['description'].strip()[:120]}",
+                    "source": source_name,
+                }
+            )
+        else:
+            latest_sighting = max(
+                fact["sightings"], key=lambda entry: (entry["timestamp"], entry["source"])
+            )
+            if (
+                latest_sighting["confidence"] != item["confidence"]
+                or latest_sighting["evidence"] != item["evidence"]
+            ):
+                builder["changes"].append(
+                    {
+                        "timestamp": timestamp,
+                        "kind": "update",
+                        "key": key,
+                        "detail": (
+                            f"Re-observed ({item['category']}) with different "
+                            f"confidence/evidence."
+                        ),
+                        "source": source_name,
+                    }
+                )
+        fact["sightings"].append(
+            {
+                "timestamp": timestamp,
+                "source": source_name,
+                "confidence": item["confidence"],
+                "evidence": item["evidence"],
+            }
+        )
+    for text in validated["uncertainties"]:
+        entry = builder["uncertainties"].get(text)
+        if entry is None:
+            builder["uncertainties"][text] = {
+                "first_seen": timestamp,
+                "last_seen": timestamp,
+                "sources": [source_name],
+            }
+        else:
+            entry["first_seen"] = min(entry["first_seen"], timestamp)
+            entry["last_seen"] = max(entry["last_seen"], timestamp)
+            if source_name not in entry["sources"]:
+                entry["sources"].append(source_name)
+    return "conflict" if contested else "applied"
+
+
+def finalize_match_state(builder: dict) -> dict:
+    """Convert a working builder into a validated match-state-v1 document.
+
+    Ids assign in first-seen order and every list is emitted sorted, so the
+    same source observations always produce byte-identical state regardless
+    of the order they were applied in. Raises on internal inconsistency;
+    never returns an invalid document.
+    """
+    latest = builder["latest_timestamp"]
+    contested = set(builder["_contested"])
+    ordered_keys = sorted(
+        builder["facts"],
+        key=lambda key: (
+            min(entry["timestamp"] for entry in builder["facts"][key]["sightings"]),
+            key[0],
+            key[1],
+        ),
+    )
+    key_to_id = {key: f"f{i:04d}" for i, key in enumerate(ordered_keys, start=1)}
+    facts = []
+    for key in ordered_keys:
+        working = builder["facts"][key]
+        sightings = sorted(
+            working["sightings"], key=lambda entry: (entry["timestamp"], entry["source"])
+        )
+        first_seen = sightings[0]["timestamp"]
+        latest_sighting = sightings[-1]
+        if first_seen in contested:
+            status = "conflicted"
+        elif latest is not None and latest_sighting["timestamp"] == latest:
+            status = "current"
+        else:
+            status = "stale"
+        facts.append(
+            {
+                "id": key_to_id[key],
+                "category": working["category"],
+                "description": working["description"],
+                "confidence": latest_sighting["confidence"],
+                "evidence": latest_sighting["evidence"],
+                "first_seen": first_seen,
+                "last_seen": latest_sighting["timestamp"],
+                "last_source": latest_sighting["source"],
+                "status": status,
+                "history": [
+                    {
+                        "timestamp": entry["timestamp"],
+                        "source": entry["source"],
+                        "confidence": entry["confidence"],
+                        "evidence": entry["evidence"],
+                    }
+                    for entry in sightings
+                ],
+            }
+        )
+    changes = sorted(
+        (
+            {
+                "timestamp": entry["timestamp"],
+                "kind": entry["kind"],
+                "fact_id": key_to_id[entry["key"]],
+                "detail": entry["detail"],
+                "source": entry["source"],
+            }
+            for entry in builder["changes"]
+        ),
+        key=lambda entry: (entry["timestamp"], entry["kind"], entry["fact_id"]),
+    )
+    state = {
+        "schema_version": MATCH_STATE_SCHEMA_VERSION,
+        "latest_timestamp": latest,
+        "sources": sorted(
+            builder["sources"], key=lambda entry: (entry["timestamp"], entry["file"])
+        ),
+        "facts": facts,
+        "changes": changes,
+        "conflicts": sorted(builder["conflicts"], key=lambda entry: entry["timestamp"]),
+        "uncertainties": [
+            {
+                "text": text,
+                "first_seen": entry["first_seen"],
+                "last_seen": entry["last_seen"],
+                "sources": sorted(entry["sources"]),
+                "resolved": False,
+            }
+            for text, entry in sorted(builder["uncertainties"].items())
+        ],
+    }
+    return validate_match_state(state)
+
+
+def build_match_state(observations: list) -> dict:
+    """Build a match-state-v1 document from ``(timestamp, source, validated)``.
+
+    Input order does not matter: observations are applied sorted by
+    (timestamp, source), so repeated builds over the same files are
+    byte-identical.
+    """
+    builder = new_match_state_builder()
+    for timestamp, source_name, validated in sorted(
+        observations, key=lambda item: (item[0], item[1])
+    ):
+        if validated["timestamp"] != timestamp:
+            raise ObservationError(
+                f"Source {source_name} timestamp {validated['timestamp']!r} does "
+                f"not match expected {timestamp}."
+            )
+        apply_observation(builder, validated, source_name)
+    return finalize_match_state(builder)
+
+
+def validate_events(data: dict) -> dict:
+    """Strictly validate an events-v1 document; reject anything else."""
+    if not isinstance(data, dict):
+        raise ObservationError("Events document must be a JSON object.")
+    _reject_extra(
+        data,
+        (
+            "schema_version",
+            "generated_from",
+            "rules_evaluated",
+            "contested_timestamps",
+            "events",
+        ),
+        "Events",
+    )
+    if data.get("schema_version") != EVENT_SCHEMA_VERSION:
+        raise ObservationError(
+            "Events requires schema_version "
+            f"'{EVENT_SCHEMA_VERSION}'."
+        )
+    generated = data.get("generated_from")
+    if not isinstance(generated, dict):
+        raise ObservationError(
+            "Events requires field 'generated_from' as an object."
+        )
+    _reject_extra(generated, ("observations", "match_state"), "Events generated_from")
+    generated_observations = generated.get("observations")
+    if (
+        not isinstance(generated_observations, list)
+        or not generated_observations
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in generated_observations
+        )
+    ):
+        raise ObservationError(
+            "Events generated_from requires 'observations' as a non-empty "
+            "list of filenames."
+        )
+    _require_non_empty_string(generated, "match_state", "Events generated_from")
+    rules = data.get("rules_evaluated")
+    if not isinstance(rules, list) or any(
+        not isinstance(item, str) or not item.strip() for item in rules
+    ):
+        raise ObservationError(
+            "Events requires field 'rules_evaluated' as a list of rule names."
+        )
+    contested = data.get("contested_timestamps")
+    if not isinstance(contested, list) or any(
+        isinstance(item, bool)
+        or not isinstance(item, (int, float))
+        or (isinstance(item, float) and not math.isfinite(item))
+        for item in contested
+    ):
+        raise ObservationError(
+            "Events requires field 'contested_timestamps' as a list of numbers."
+        )
+    if "events" not in data or not isinstance(data["events"], list):
+        raise ObservationError("Events requires field 'events' as a list.")
+    for index, event in enumerate(data["events"]):
+        where = f"events[{index}]"
+        if not isinstance(event, dict):
+            raise ObservationError(f"{where} must be an object.")
+        _reject_extra(
+            event,
+            (
+                "schema_version",
+                "id",
+                "type",
+                "timestamp",
+                "status",
+                "rule",
+                "sources",
+                "evidence",
+                "confidence",
+                "detail",
+            ),
+            where,
+        )
+        if event.get("schema_version") != EVENT_SCHEMA_VERSION:
+            raise ObservationError(
+                f"{where} requires schema_version '{EVENT_SCHEMA_VERSION}'."
+            )
+        _require_non_empty_string(event, "id", where)
+        _require_non_empty_string(event, "type", where)
+        event_ts = event.get("timestamp")
+        if (
+            isinstance(event_ts, bool)
+            or not isinstance(event_ts, (int, float))
+            or (isinstance(event_ts, float) and not math.isfinite(event_ts))
+        ):
+            raise ObservationError(f"{where} field 'timestamp' must be a number.")
+        if event.get("status") not in EVENT_STATUSES:
+            raise ObservationError(
+                f"{where} has invalid status '{event.get('status')}'."
+            )
+        _require_non_empty_string(event, "rule", where)
+        sources = event.get("sources")
+        if (
+            not isinstance(sources, list)
+            or not sources
+            or any(not isinstance(item, dict) for item in sources)
+        ):
+            raise ObservationError(
+                f"{where} requires 'sources' as a non-empty list of objects."
+            )
+        for entry_index, entry in enumerate(sources):
+            entry_where = f"{where}.sources[{entry_index}]"
+            _reject_extra(
+                entry, ("timestamp", "file", "fact_id"), entry_where
+            )
+            entry_ts = entry.get("timestamp")
+            if (
+                isinstance(entry_ts, bool)
+                or not isinstance(entry_ts, (int, float))
+                or (isinstance(entry_ts, float) and not math.isfinite(entry_ts))
+            ):
+                raise ObservationError(
+                    f"{entry_where} field 'timestamp' must be a number."
+                )
+            _require_non_empty_string(entry, "file", entry_where)
+            _require_non_empty_string(entry, "fact_id", entry_where)
+        evidence = event.get("evidence")
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or any(
+                not isinstance(item, str) or not item.strip() for item in evidence
+            )
+        ):
+            raise ObservationError(
+                f"{where} requires 'evidence' as a non-empty list of strings."
+            )
+        if event.get("confidence") not in OBSERVATION_CONFIDENCES:
+            raise ObservationError(
+                f"{where} has invalid confidence '{event.get('confidence')}'."
+            )
+        _require_non_empty_string(event, "detail", where)
+    return data
+
+
+def event_id(
+    event_type: str,
+    timestamp,
+    status: str,
+    rule: str,
+    sources: list,
+    evidence: list,
+    detail: str,
+    confidence: str,
+) -> str:
+    """Deterministic event id from the event's canonical content."""
+    canonical = json.dumps(
+        {
+            "type": event_type,
+            "timestamp": timestamp,
+            "status": status,
+            "rule": rule,
+            "sources": sources,
+            "evidence": evidence,
+            "detail": detail,
+            "confidence": confidence,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return "evt-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+
+
+def _feed_name_tokens(text: str) -> list[str]:
+    """Distinct TAG.NAME tokens in encounter order (e.g. RRQ.JEEK)."""
+    tokens = []
+    for match in EVENT_NAME_RE.finditer(text):
+        token = match.group(0)
+        if token not in tokens:
+            tokens.append(token)
+    return tokens
+
+
+def _mentions_feed(text: str) -> bool:
+    """Whether the description explicitly references a kill/elim feed."""
+    lowered = text.lower()
+    return any(phrase in lowered for phrase in EVENT_FEED_MENTIONS)
+
+
+def _elim_readings(description: str) -> list:
+    """Team-scoped Elim counter readings quoted in one description.
+
+    A reading needs the counter and a team label in the same sentence; the
+    counter is attributed to the nearest team label (the preceding one wins
+    ties), which is how such HUD captions read ("team AG ... Elim 4").
+    Dots inside TAG.NAME tokens (e.g. AG.BAROS) do not end sentences.
+    Sentences without a team label yield nothing. Returns
+    ``(scope, count, sentence)`` triples using the first counter per
+    sentence.
+    """
+    masked = EVENT_NAME_RE.sub(
+        lambda match: match.group(0).replace(".", "\x00"), description
+    )
+    readings = []
+    parts = re.split(r"([.!?]+)", masked)
+    for index in range(0, len(parts), 2):
+        core = parts[index]
+        terminator = parts[index + 1] if index + 1 < len(parts) else ""
+        sentence = (core + terminator).replace("\x00", ".").strip()
+        if not sentence:
+            continue
+        counter = EVENT_ELIM_RE.search(core)
+        if counter is None:
+            continue
+        scopes = [
+            (match.start(), match.group(1).upper())
+            for match in EVENT_TEAM_SCOPE_RE.finditer(core)
+        ]
+        if not scopes:
+            continue
+        pos = counter.start()
+        before = [(pos - start, name) for start, name in scopes if start < pos]
+        if before:
+            scope = min(before)[1]
+        else:
+            scope = min([(start - pos, name) for start, name in scopes])[1]
+        readings.append((scope, int(counter.group(1)), sentence))
+    return readings
+
+
+def detect_events(observations: list, state: dict) -> tuple[dict, dict]:
+    """Detect evidence-grounded events from validated observations + state.
+
+    Inputs sort by (timestamp, source); identical documents are skipped as
+    duplicates and timestamps with divergent documents are skipped as
+    contested — conflicting evidence is never resolved in favor of one
+    side. Only non-conflicted state facts can trigger rules, and each
+    distinct trigger emits once (deduplicated by deterministic id), so the
+    same inputs always yield the same document.
+
+    Returns ``(events_document, counts)``. Raises ObservationError on
+    invalid input; callers validate file-level input first and report
+    per-file rejections.
+    """
+    for timestamp, source_name, validated in observations:
+        validate_observation(validated)
+        if validated["timestamp"] != timestamp:
+            raise ObservationError(
+                f"Source {source_name} timestamp {validated['timestamp']!r} does "
+                f"not match expected {timestamp}."
+            )
+    validate_match_state(state)
+    facts_by_key = {
+        (fact["category"], fact["description"]): fact for fact in state["facts"]
+    }
+    ordered = sorted(observations, key=lambda item: (item[0], item[1]))
+    digests_by_timestamp: dict = {}
+    unique = []
+    skipped = 0
+    for timestamp, source_name, validated in ordered:
+        digest = observation_sha256(validated)
+        digests = digests_by_timestamp.setdefault(timestamp, set())
+        if digest in digests:
+            skipped += 1
+            continue
+        digests.add(digest)
+        unique.append((timestamp, source_name, validated))
+    by_timestamp: dict = {}
+    for timestamp, source_name, validated in unique:
+        by_timestamp.setdefault(timestamp, []).append((source_name, validated))
+    contested = sorted(
+        timestamp
+        for timestamp, docs in by_timestamp.items()
+        if len({observation_sha256(validated) for _, validated in docs}) > 1
+    )
+    clean = [
+        (timestamp, source_name, validated)
+        for timestamp, source_name, validated in unique
+        if timestamp not in contested
+    ]
+    skipped += sum(len(by_timestamp[timestamp]) for timestamp in contested)
+    events: dict = {}
+
+    def emit(event_type, timestamp, rule, sources, evidence, confidence, detail):
+        ordered_sources = sorted(
+            sources, key=lambda entry: (entry["timestamp"], entry["file"])
+        )
+        eid = event_id(
+            event_type,
+            timestamp,
+            "candidate",
+            rule,
+            ordered_sources,
+            evidence,
+            detail,
+            confidence,
+        )
+        events.setdefault(
+            eid,
+            {
+                "schema_version": EVENT_SCHEMA_VERSION,
+                "id": eid,
+                "type": event_type,
+                "timestamp": timestamp,
+                "status": "candidate",
+                "rule": rule,
+                "sources": ordered_sources,
+                "evidence": evidence,
+                "detail": detail,
+                "confidence": confidence,
+            },
+        )
+
+    def state_fact(category, description, source_name):
+        fact = facts_by_key.get(fact_key(category, description))
+        if fact is None:
+            raise ObservationError(
+                f"Observation {source_name} has no matching state fact; "
+                f"rebuild match state first."
+            )
+        if fact["status"] == "conflicted":
+            return None
+        return fact
+
+    for timestamp, source_name, validated in clean:
+        for item in validated["observations"]:
+            if (
+                item["category"] != "hud"
+                or item["confidence"] not in EVENT_TRIGGER_CONFIDENCES
+            ):
+                continue
+            if not _mentions_feed(item["description"]):
+                continue
+            names = _feed_name_tokens(item["evidence"])
+            if len(names) < 2:
+                continue
+            fact = state_fact(item["category"], item["description"], source_name)
+            if fact is None:
+                continue
+            emit(
+                "kill_feed_entry",
+                timestamp,
+                "kill_feed_entry/v1",
+                [
+                    {
+                        "timestamp": timestamp,
+                        "file": source_name,
+                        "fact_id": fact["id"],
+                    }
+                ],
+                [item["description"], item["evidence"]],
+                item["confidence"],
+                f"HUD observation at {timestamp}s references a kill feed and "
+                f"transcribes names {', '.join(names)}; killer/victim roles "
+                f"are not established.",
+            )
+    readings = []
+    for timestamp, source_name, validated in clean:
+        for item in validated["observations"]:
+            if (
+                item["category"] != "hud"
+                or item["confidence"] not in EVENT_TRIGGER_CONFIDENCES
+            ):
+                continue
+            for scope, count, sentence in _elim_readings(item["description"]):
+                fact = state_fact(item["category"], item["description"], source_name)
+                if fact is None:
+                    continue
+                readings.append(
+                    {
+                        "timestamp": timestamp,
+                        "source": source_name,
+                        "fact_id": fact["id"],
+                        "scope": scope,
+                        "count": count,
+                        "sentence": sentence,
+                        "confidence": item["confidence"],
+                    }
+                )
+    readings.sort(key=lambda entry: (entry["timestamp"], entry["source"]))
+    for index in range(1, len(readings)):
+        earlier = readings[index - 1]
+        later = readings[index]
+        if later["timestamp"] <= earlier["timestamp"]:
+            continue
+        if later["scope"] != earlier["scope"]:
+            continue
+        if later["count"] <= earlier["count"]:
+            continue
+        emit(
+            "elim_count_increased",
+            later["timestamp"],
+            "elim_count_increased/v1",
+            [
+                {
+                    "timestamp": earlier["timestamp"],
+                    "file": earlier["source"],
+                    "fact_id": earlier["fact_id"],
+                },
+                {
+                    "timestamp": later["timestamp"],
+                    "file": later["source"],
+                    "fact_id": later["fact_id"],
+                },
+            ],
+            [earlier["sentence"], later["sentence"]],
+            later["confidence"],
+            f"Team {later['scope']} elim counter increased "
+            f"{earlier['count']}->{later['count']} between "
+            f"{earlier['timestamp']}s and {later['timestamp']}s; both readings "
+            f"explicitly scope the counter to the same team. Who was "
+            f"eliminated, by whom, and by what means are not established.",
+        )
+    document = {
+        "schema_version": EVENT_SCHEMA_VERSION,
+        "generated_from": {
+            # Every validated input, including contested-skipped files whose
+            # exclusion is itself part of the replay provenance.
+            "observations": sorted({source for _, source, _ in unique}),
+            "match_state": MATCH_STATE_FILENAME,
+        },
+        "rules_evaluated": sorted(EVENT_RULES),
+        "contested_timestamps": contested,
+        "events": sorted(
+            events.values(),
+            key=lambda event: (event["timestamp"], event["type"], event["id"]),
+        ),
+    }
+    counts = {
+        "accepted": len(clean),
+        "skipped": skipped,
+        "contested": contested,
+    }
+    return validate_events(document), counts
+
+
+def run_detect_events(
+    observations_dir: Path | None = None,
+    state_path: Path | None = None,
+    events_path: Path | None = None,
+    frames_dir: Path | None = None,
+) -> int:
+    """Detect evidence-grounded events from stored data; exit code.
+
+    Offline: reads only existing ``frame_<timestamp>.json`` files and the
+    stored ``match_state.json`` snapshot, never calls Baseten. The snapshot
+    must exactly cover the discovered observations (timestamps and content
+    hashes), otherwise detection refuses to run on stale state. Reports
+    discovered/accepted/skipped/rejected/emitted counts plus the output
+    path. Returns 0 only when at least one observation was accepted and
+    none was rejected; leaves any previous valid events file intact
+    whenever nothing acceptable was built or the write fails.
+    """
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    st_path = MATCH_STATE_PATH if state_path is None else Path(state_path)
+    out_path = EVENTS_PATH if events_path is None else Path(events_path)
+    warn_about_legacy_observations(frames_dir)
+    files = discover_observation_files(obs_dir)
+    if not files:
+        print(f"Error: no frame_*.json observations in {obs_dir}.", file=sys.stderr)
+        if find_legacy_observations(frames_dir):
+            print(
+                "Hint: legacy observation files exist in the frames directory; "
+                "run 'python main.py --migrate-observations' first.",
+                file=sys.stderr,
+            )
+        return 1
+    try:
+        state = validate_match_state(
+            json.loads(st_path.read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError) as exc:
+        print(
+            f"Error: invalid match state {st_path}: {exc}. "
+            f"Run 'python main.py --rebuild-state' first.",
+            file=sys.stderr,
+        )
+        return 1
+    accepted: list = []
+    skipped: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    seen_digests: dict = {}
+    for timestamp, path in files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        try:
+            validated = ensure_observation_timestamp(
+                validate_observation(parse_observation(text)), timestamp
+            )
+        except ObservationError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        digest = observation_sha256(validated)
+        if digest in seen_digests.setdefault(timestamp, set()):
+            skipped.append(path.name)
+            continue
+        seen_digests[timestamp].add(digest)
+        accepted.append((timestamp, path.name, validated))
+    for name, reason in rejected:
+        print(f"  rejected: {name}: {reason}")
+    if not accepted:
+        print(
+            f"Event detection failed: {len(files)} discovered, "
+            f"{len(rejected)} rejected, none accepted.",
+            file=sys.stderr,
+        )
+        return 1
+    state_sources = {entry["timestamp"]: entry for entry in state["sources"]}
+    if sorted(state_sources) != sorted(
+        {timestamp for timestamp, _, _ in accepted}
+    ) or any(
+        state_sources[timestamp]["file"] != source_name
+        or state_sources[timestamp]["sha256"] != observation_sha256(validated)
+        for timestamp, source_name, validated in accepted
+    ):
+        print(
+            f"Error: match state {st_path} does not cover the discovered "
+            f"observations (timestamps or content differ). "
+            f"Run 'python main.py --rebuild-state' first.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        document, counts = detect_events(
+            [(timestamp, source, validated) for timestamp, source, validated in accepted],
+            state,
+        )
+    except ObservationError as exc:
+        print(f"Event detection failed: {exc}", file=sys.stderr)
+        return 1
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(out_path, document)
+    except OSError as exc:
+        print(
+            f"Event detection failed: could not write {out_path}: {exc}. "
+            f"Previous events file left intact.",
+            file=sys.stderr,
+        )
+        return 1
+    skipped_total = len(skipped) + counts["skipped"]
+    print(
+        f"Event detection finished: {len(files)} discovered, "
+        f"{len(accepted)} accepted, {skipped_total} skipped, "
+        f"{len(rejected)} rejected, {len(document['events'])} emitted; "
+        f"{len(counts['contested'])} contested timestamp(s)."
+    )
+    for name in counts["contested"]:
+        print(f"  contested: {name}")
+    for event in document["events"]:
+        print(f"  emitted: {event['id']} {event['type']} at {event['timestamp']}s")
+    print(f"Events snapshot: {out_path}")
+    if rejected:
+        print("Event detection status: partial failure.")
+        return 1
+    print("Event detection status: success.")
+    return 0
+
+
+def run_state_rebuild(
+    observations_dir: Path | None = None,
+    state_path: Path | None = None,
+    frames_dir: Path | None = None,
+) -> int:
+    """Rebuild the rolling match state from stored observations; exit code.
+
+    Offline: reads only existing ``frame_<timestamp>.json`` files, never
+    calls Baseten. Reports discovered/accepted/skipped/rejected counts plus
+    the state path. Returns 0 only when at least one observation was
+    accepted and none was rejected; leaves any previous valid snapshot
+    intact whenever nothing acceptable was built or the write fails.
+    """
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    out_path = MATCH_STATE_PATH if state_path is None else Path(state_path)
+    warn_about_legacy_observations(frames_dir)
+    files = discover_observation_files(obs_dir)
+    if not files:
+        print(f"Error: no frame_*.json observations in {obs_dir}.", file=sys.stderr)
+        if find_legacy_observations(frames_dir):
+            print(
+                "Hint: legacy observation files exist in the frames directory; "
+                "run 'python main.py --migrate-observations' first.",
+                file=sys.stderr,
+            )
+        return 1
+    builder = new_match_state_builder()
+    accepted: list[str] = []
+    skipped: list[str] = []
+    rejected: list[tuple[str, str]] = []
+    for timestamp, path in files:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        try:
+            validated = ensure_observation_timestamp(
+                validate_observation(parse_observation(text)), timestamp
+            )
+        except ObservationError as exc:
+            rejected.append((path.name, str(exc)))
+            continue
+        outcome = apply_observation(builder, validated, path.name)
+        if outcome == "duplicate":
+            skipped.append(path.name)
+        else:
+            accepted.append(path.name)
+    for name, reason in rejected:
+        print(f"  rejected: {name}: {reason}")
+    if not accepted:
+        print(
+            f"State rebuild failed: {len(files)} discovered, "
+            f"{len(rejected)} rejected, none accepted.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        state = finalize_match_state(builder)
+    except ObservationError as exc:
+        print(f"State rebuild failed: invalid built state: {exc}", file=sys.stderr)
+        return 1
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        write_match_state(out_path, state)
+    except OSError as exc:
+        print(
+            f"State rebuild failed: could not write {out_path}: {exc}. "
+            f"Previous snapshot left intact.",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"State rebuild finished: {len(files)} discovered, "
+        f"{len(accepted)} accepted, {len(skipped)} skipped, "
+        f"{len(rejected)} rejected; {len(state['conflicts'])} conflict(s)."
+    )
+    for name, reason in rejected:
+        print(f"  rejected: {name}: {reason}")
+    print(f"State snapshot: {out_path}")
+    if rejected:
+        print("State rebuild status: partial failure.")
+        return 1
+    print("State rebuild status: success.")
+    return 0
+
+
 def main():
     if not VIDEO_PATH.is_file():
         raise FileNotFoundError(f"Video not found: {VIDEO_PATH.resolve()}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
     video = cv2.VideoCapture(str(VIDEO_PATH))
 
     if not video.isOpened():
@@ -424,7 +1812,7 @@ def main():
                 timestamp += INTERVAL
                 continue
 
-            output_path = OUTPUT_DIR / f"frame_{timestamp:05d}.jpg"
+            output_path = FRAMES_DIR / f"frame_{timestamp:05d}.jpg"
 
             if not cv2.imwrite(str(output_path), frame):
                 raise RuntimeError(f"Could not save {output_path}")
@@ -439,14 +1827,22 @@ def main():
         video.release()
 
 
-def run_vision_test(client=None, frame_path: Path | None = None):
+def run_vision_test(
+    client=None,
+    frame_path: Path | None = None,
+    observations_dir: Path | None = None,
+):
     """Analyse the first extracted frame (frame_00000.jpg) via Baseten.
 
-    ``client`` and ``frame_path`` default to the live Baseten client and
-    :data:`VISION_FRAME_PATH`; they exist so tests can inject a fake client
-    and a fixture frame without network access.
+    The validated observation is saved to the observations directory
+    (``output/observations/frame_00000.json``), not next to the JPEG.
+    ``client``, ``frame_path``, and ``observations_dir`` default to the live
+    Baseten client and standard paths; they exist so tests can inject a fake
+    client and fixture paths without network access.
     """
     frame = VISION_FRAME_PATH if frame_path is None else Path(frame_path)
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    warn_about_legacy_observations(frame.parent)
     timestamp = parse_frame_timestamp(frame.name)
     if timestamp is None:
         raise RuntimeError(f"Cannot derive timestamp from frame name: {frame.name}")
@@ -468,7 +1864,8 @@ def run_vision_test(client=None, frame_path: Path | None = None):
 
     rendered = json.dumps(validated, indent=2, ensure_ascii=False)
     print(rendered)
-    destination = frame.with_suffix(".json")
+    obs_dir.mkdir(parents=True, exist_ok=True)
+    destination = observation_path_for_frame(frame, obs_dir)
     write_observation_json(destination, validated)
     print(f"Saved validated observation: {destination}")
 
@@ -478,16 +1875,19 @@ def run_vision_batch(
     force: bool = False,
     client=None,
     directory: Path | None = None,
+    observations_dir: Path | None = None,
 ) -> int:
     """Analyse up to ``limit`` frames spread across the clip; return exit code.
 
     Each successfully analysed frame gets one validated observation-v1 JSON
-    next to its JPEG. Frames that already have a validated observation are
-    skipped unless ``force`` is set. Returns 0 only when every selected frame
-    ends with a validated observation; any failure (or zero candidates)
-    returns 1 after reporting the completed results.
+    in the observations directory. Frames that already have a validated
+    observation there are skipped unless ``force`` is set. Returns 0 only
+    when every selected frame ends with a validated observation; any failure
+    (or zero candidates) returns 1 after reporting the completed results.
     """
-    frames_dir = OUTPUT_DIR if directory is None else Path(directory)
+    frames_dir = FRAMES_DIR if directory is None else Path(directory)
+    obs_dir = OBSERVATIONS_DIR if observations_dir is None else Path(observations_dir)
+    warn_about_legacy_observations(frames_dir)
     candidates = discover_candidate_frames(frames_dir)
     if not candidates:
         print(f"Error: no frame_*.jpg candidates in {frames_dir}.", file=sys.stderr)
@@ -498,9 +1898,10 @@ def run_vision_batch(
         f"Discovered {len(candidates)} candidate frames in {frames_dir}; "
         f"selected {len(selected)}: {stamps}"
     )
+    obs_dir.mkdir(parents=True, exist_ok=True)
     planned = []
     for timestamp, frame_path in selected:
-        destination = frame_path.with_suffix(".json")
+        destination = observation_path_for_frame(frame_path, obs_dir)
         cached = not force and (
             read_validated_observation(destination, timestamp) is not None
         )
@@ -584,7 +1985,25 @@ if __name__ == "__main__":
         "--vision-batch",
         action="store_true",
         help="Analyse up to --limit frames spread across the clip, saving "
-        "one validated observation-v1 JSON per frame next to its JPEG.",
+        "one validated observation-v1 JSON per frame in output/observations/.",
+    )
+    mode.add_argument(
+        "--migrate-observations",
+        action="store_true",
+        help="Move validated legacy observation JSONs from output/frames/ "
+        "to output/observations/ (verified, idempotent, offline).",
+    )
+    mode.add_argument(
+        "--rebuild-state",
+        action="store_true",
+        help="Rebuild output/observations/match_state.json from the stored "
+        "observation-v1 JSON files (offline, no API calls).",
+    )
+    mode.add_argument(
+        "--detect-events",
+        action="store_true",
+        help="Detect evidence-grounded events from stored observations and "
+        "match_state.json into output/events/events.json (offline).",
     )
     parser.add_argument(
         "--limit",
@@ -615,5 +2034,11 @@ if __name__ == "__main__":
                 force=args.force,
             )
         )
+    elif args.migrate_observations:
+        raise SystemExit(run_migration())
+    elif args.rebuild_state:
+        raise SystemExit(run_state_rebuild())
+    elif args.detect_events:
+        raise SystemExit(run_detect_events())
     else:
         main()

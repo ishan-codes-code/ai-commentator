@@ -28,12 +28,11 @@ acceptance criteria, and what is explicitly out of scope.
 - **Acceptance:** observations for N selected frames validate; failure modes
   documented.
 - **Out of scope:** tracking state across frames, commentary.
-- **Status:** implemented, pending live verification (not complete).
-  `--vision-batch` with spread selection, per-frame validation, and failure
-  reporting is implemented and mock-verified (74 unit tests pass in Docker;
-  failure modes documented in `docs/current-state.md` and `docs/testing.md`).
-  Remaining: one authorized live `--vision-batch --limit 5` run and
-  inspection of observation quality/coverage.
+- **Status:** complete. `--vision-batch` with spread selection, per-frame
+  validation, and failure reporting is implemented (118 unit tests pass in
+  Docker). The 5 stored live observations (timestamps 0, 48, 96, 147, 195)
+  validate against `observation-v1` and were content-surveyed; failure modes
+  are documented in `docs/current-state.md` and `docs/testing.md`.
 
 ## 4. Develop a rolling match-state tracker
 
@@ -42,6 +41,11 @@ acceptance criteria, and what is explicitly out of scope.
 - **Acceptance:** state updates deterministically from validated
   observations; state shape is documented in `docs/contracts/`.
 - **Out of scope:** event judgments, commentary wording.
+- **Status:** complete. `--rebuild-state` builds a validated
+  `match-state-v1` snapshot offline from stored observations (deterministic
+  rebuilds verified byte-identical on fixtures and on the real 5
+  observations); the shape and update semantics are documented in
+  `docs/contracts/match-state-v1.md`.
 
 ## 5. Detect meaningful changes, prevent unsupported event claims
 
@@ -50,6 +54,13 @@ acceptance criteria, and what is explicitly out of scope.
 - **Acceptance:** tests show supported events fire and unsupported claims
   are suppressed on fixture observations.
 - **Out of scope:** commentary phrasing, audio.
+- **Status:** complete. `--detect-events` emits `events-v1` candidates from
+  two conservative rules (transcribed kill feed, team-scoped elim-counter
+  increase) with full provenance; 34 fixture tests show supported events
+  firing and unsupported claims (missing nameplates, ambiguous HUD,
+  timers, persistent banners, low confidence, contested evidence)
+  suppressed. Real-tree run: 5 accepted, 0 emitted — documented as the
+  honest result for the current evidence.
 
 ## 6. Add controlled sampling and bounded request concurrency
 

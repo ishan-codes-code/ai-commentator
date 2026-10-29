@@ -30,9 +30,9 @@ and eventually OBS audio integration.
   response. Isolate provider-specific API logic (base URL, model ID, request
   shape, error mapping) behind a clear boundary so the provider can change
   without touching pipeline logic.
-- **Status:** implemented for the single test frame (structured
-  `observation-v1` JSON via Baseten); multi-frame use not yet implemented
-  or fully verified.
+- **Status:** implemented for the single test frame and the multi-frame
+  batch (structured `observation-v1` JSON via Baseten); live multi-frame
+  use verified on 5 frames.
 
 ### 3. Structured observation validation
 
@@ -49,7 +49,10 @@ and eventually OBS audio integration.
 
 - **Responsibility:** maintain match state across frames (what is known,
   what changed) so commentary can reference developments over time.
-- **Status:** planned.
+- **Status:** match state implemented (`match-state-v1`, rebuilt offline
+  via `python main.py --rebuild-state`); deterministic event detection
+  implemented (`events-v1`, via `python main.py --detect-events`,
+  candidate-only statuses). Richer event judgments remain future work.
 
 ### 5. Evidence-aware commentary generation
 

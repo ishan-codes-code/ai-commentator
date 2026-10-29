@@ -30,7 +30,7 @@ docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
 
 Sends only `output/frames/frame_00000.jpg` to the configured model,
 validates the response against `docs/contracts/observation-v1.md`, prints
-the validated JSON, and saves it to `output/frames/frame_00000.json`
+the validated JSON, and saves it to `output/observations/frame_00000.json`
 (git-ignored). Requires `BASETEN_API_KEY` to be set in your shell
 or `.env` (never echo or commit its value). Invalid model output exits
 non-zero with an `Invalid observation:` error and saves nothing.
@@ -46,8 +46,13 @@ Covers `parse_observation` / `validate_observation` with fixtures for valid
 and invalid responses (see `tests/test_observation_schema.py`), plus frame
 discovery, spread selection, the shared per-frame vision pipeline, atomic
 output writing, batch reporting, and single-frame compatibility via a fake
-API client (see `tests/test_vision_batch.py`). Tests mount read-only into
-the container; no image change is needed to run them.
+API client (see `tests/test_vision_batch.py`); output-layout separation,
+legacy migration, and extraction (see `tests/test_output_layout.py`); and
+match-state validation, update semantics, determinism, and no-inference
+rules (see `tests/test_match_state.py`); and event validation, firing
+rules, suppression cases, deduplication, determinism, and source
+preservation via fixtures (see `tests/test_event_detection.py`). Tests
+mount read-only into the container; no image change is needed to run them.
 
 ## Multi-frame vision batch (offline verification, no API calls)
 
@@ -73,11 +78,62 @@ docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
 ```
 
 Analyses up to 5 frames spread across the clip (default when `--limit` is
-omitted), saving one validated `observation-v1` JSON per frame next to its
-JPEG. Frames with an already-validated observation are skipped unless
-`--force` is given. Any per-frame failure still reports the completed
-results but exits non-zero. This makes one paid request per analysed frame;
-run it only with explicit authorization, and never default to the full clip.
+omitted), saving one validated `observation-v1` JSON per frame in
+`output/observations/`. Frames with an already-validated observation are
+skipped unless `--force` is given. Any per-frame failure still reports the
+completed results but exits non-zero. This makes one paid request per
+analysed frame; run it only with explicit authorization, and never default
+to the full clip.
+
+## Output layout and legacy migration (offline)
+
+JPEG frames live in `output/frames/`; generated JSON lives in
+`output/observations/` (`frame_<timestamp>.json` per analysed frame, plus
+`match_state.json`); generated event output lives in `output/events/`
+(`events.json`). Observations created before the split that still sit
+in `output/frames/` are detected by vision commands (non-blocking warning)
+and moved by an explicit verified migration:
+
+```sh
+# Move validated legacy JSONs to output/observations/ (idempotent).
+# Verifies destination bytes before removing any source; conflicts and
+# invalid files are left in place and reported, exit 1 until resolved.
+docker compose run --rm commentator python main.py --migrate-observations
+```
+
+## Match-state rebuild (offline, no API calls)
+
+```sh
+docker compose run --rm commentator python main.py --rebuild-state
+```
+
+Reads `output/observations/frame_*.json`, validates each file (schema plus
+filename timestamp), and atomically writes
+`output/observations/match_state.json` (see
+`docs/contracts/match-state-v1.md`). Reports discovered / accepted /
+skipped / rejected counts plus the state path; exits non-zero when nothing
+was accepted or anything was rejected. Re-running over unchanged files
+produces a byte-identical snapshot.
+
+## Event detection (offline, no API calls)
+
+```sh
+docker compose run --rm commentator python main.py --detect-events
+```
+
+Reads `output/observations/frame_*.json` plus the stored
+`output/observations/match_state.json`, refuses to run on a stale snapshot
+(state timestamps and content hashes must exactly cover the discovered
+observations), and atomically writes `output/events/events.json` (see
+`docs/contracts/events-v1.md`). Reports discovered / accepted / skipped /
+rejected / emitted counts plus contested timestamps and the output path;
+exits non-zero when nothing was accepted or anything was rejected.
+Re-running over unchanged inputs produces a byte-identical file. Supported
+events (transcribed kill-feed entry, team-scoped elim-counter increase)
+emit as `candidate`s with full provenance; everything else — missing
+nameplates, ambiguous HUD numbers, timers, persistent banners,
+low-confidence triggers, contested evidence — is suppressed. Never makes
+network calls and never rewrites sources or state.
 
 ## Configuration and secret-handling checks
 

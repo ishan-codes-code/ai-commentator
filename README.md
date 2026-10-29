@@ -6,6 +6,11 @@ Baseten-hosted vision model. Details live in `docs/`; start with
 
 ## Commands
 
+Output layout: `output/frames/` holds extracted JPEGs;
+`output/observations/` holds generated JSON (`frame_<timestamp>.json`
+per analysed frame plus the `match_state.json` snapshot);
+`output/events/` holds the generated `events.json` snapshot.
+
 ```sh
 # Build the image.
 docker compose build
@@ -21,6 +26,18 @@ docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
 # per analysed frame). Omit --limit to use the default of 5.
 docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
   commentator python main.py --vision-batch --limit 5
+
+# Move legacy observation JSONs from output/frames/ to
+# output/observations/ (offline, verified, idempotent).
+docker compose run --rm commentator python main.py --migrate-observations
+
+# Rebuild output/observations/match_state.json from stored
+# observations (offline, no API calls).
+docker compose run --rm commentator python main.py --rebuild-state
+
+# Detect evidence-grounded events into output/events/events.json
+# (offline, no API calls).
+docker compose run --rm commentator python main.py --detect-events
 
 # Offline unit tests (no API calls).
 docker compose run --rm -v "$PWD/tests:/app/tests:ro" \

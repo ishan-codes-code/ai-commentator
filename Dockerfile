@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-RUN mkdir -p /app/output/frames \
+RUN mkdir -p /app/output/frames /app/output/observations /app/output/events \
     && useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app
 
