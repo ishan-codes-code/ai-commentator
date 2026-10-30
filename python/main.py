@@ -16,13 +16,18 @@ import cv2
 import numpy as np
 from openai import APIError, OpenAI
 
-VIDEO_PATH = Path("gameplay/match.mp4")
+# Repository root (the directory containing electron/, python/, tests/).
+# All default input/output paths resolve from here so the engine behaves
+# the same regardless of the process working directory. Every runner also
+# accepts explicit directory overrides for Electron-driven runs.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VIDEO_PATH = PROJECT_ROOT / "gameplay" / "match.mp4"
 # Output layout: extracted JPEGs live under FRAMES_DIR; generated JSON
 # (per-frame observations and the rolling match-state snapshot) lives under
 # OBSERVATIONS_DIR. The two trees share frame-based basenames
 # (frame_<timestamp>.jpg <-> frame_<timestamp>.json) but never mix.
-FRAMES_DIR = Path("output/frames")
-OBSERVATIONS_DIR = Path("output/observations")
+FRAMES_DIR = PROJECT_ROOT / "output" / "frames"
+OBSERVATIONS_DIR = PROJECT_ROOT / "output" / "observations"
 MATCH_STATE_FILENAME = "match_state.json"
 MATCH_STATE_PATH = OBSERVATIONS_DIR / MATCH_STATE_FILENAME
 VISION_FRAME_PATH = FRAMES_DIR / "frame_00000.jpg"
@@ -38,7 +43,7 @@ OBSERVATION_FILENAME_RE = re.compile(r"^frame_(\d+)\.json$")
 MATCH_STATE_SCHEMA_VERSION = "match-state-v1"
 MATCH_STATE_STATUSES = ("current", "stale", "conflicted")
 MATCH_STATE_CHANGE_KINDS = ("new_fact", "update")
-EVENTS_DIR = Path("output/events")
+EVENTS_DIR = PROJECT_ROOT / "output" / "events"
 EVENTS_FILENAME = "events.json"
 EVENTS_PATH = EVENTS_DIR / EVENTS_FILENAME
 EVENT_SCHEMA_VERSION = "events-v1"
@@ -49,7 +54,7 @@ EVENT_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*\.[A-Za-z0-9_]+")
 EVENT_ELIM_RE = re.compile(r"Elim\s+(\d+)")
 EVENT_TEAM_SCOPE_RE = re.compile(r"\bteam\s+([A-Za-z0-9_]+)", re.IGNORECASE)
 EVENT_TRIGGER_CONFIDENCES = ("high", "medium")
-COMMENTARY_DIR = Path("output/commentary")
+COMMENTARY_DIR = PROJECT_ROOT / "output" / "commentary"
 COMMENTARY_FILENAME = "commentary.json"
 COMMENTARY_PATH = COMMENTARY_DIR / COMMENTARY_FILENAME
 COMMENTARY_SCHEMA_VERSION = "commentary-v1"
@@ -84,7 +89,7 @@ COMMENTARY_GATE_RULES = (
 WRITER_MAX_CLAIMS = 6
 WRITER_MAX_HISTORY_LINES = 4
 WRITER_MAX_EVIDENCE_CHARS = 500
-SCRIPT_DIR = Path("output/script")
+SCRIPT_DIR = PROJECT_ROOT / "output" / "script"
 SCRIPT_FILENAME = "script.json"
 SCRIPT_PATH = SCRIPT_DIR / SCRIPT_FILENAME
 SCRIPT_SCHEMA_VERSION = "script-v1"
@@ -2808,7 +2813,7 @@ def run_writer_path(claims: list, history_texts: list, client) -> list:
         api_key = os.environ.get("BASETEN_API_KEY")
         if not api_key:
             raise RuntimeError(
-                "BASETEN_API_KEY is not set in the container environment."
+                "BASETEN_API_KEY is not set in the environment."
             )
         try:
             with OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL) as live_client:
@@ -3664,7 +3669,7 @@ def run_generate_script(
             api_key = os.environ.get("BASETEN_API_KEY")
             if not api_key:
                 raise RuntimeError(
-                    "BASETEN_API_KEY is not set in the container environment."
+                    "BASETEN_API_KEY is not set in the environment."
                 )
             with OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL) as live_client:
                 raw = request_writer_text(live_client, prompt, api_key=api_key)
@@ -3797,12 +3802,20 @@ def run_generate_script(
     return code
 
 
-def main():
-    if not VIDEO_PATH.is_file():
-        raise FileNotFoundError(f"Video not found: {VIDEO_PATH.resolve()}")
+def main(video_path: Path | None = None, frames_dir: Path | None = None):
+    """Extract one JPEG every INTERVAL seconds from the gameplay video.
 
-    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
-    video = cv2.VideoCapture(str(VIDEO_PATH))
+    Defaults to the project-root ``gameplay/match.mp4`` video and the
+    project-root ``output/frames/`` directory; the Electron worker passes
+    the user-selected video and output locations explicitly.
+    """
+    source = VIDEO_PATH if video_path is None else Path(video_path)
+    out_dir = FRAMES_DIR if frames_dir is None else Path(frames_dir)
+    if not source.is_file():
+        raise FileNotFoundError(f"Video not found: {source.resolve()}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    video = cv2.VideoCapture(str(source))
 
     if not video.isOpened():
         raise RuntimeError("Could not open the video.")
@@ -3832,7 +3845,7 @@ def main():
                 timestamp += INTERVAL
                 continue
 
-            output_path = FRAMES_DIR / f"frame_{timestamp:05d}.jpg"
+            output_path = out_dir / f"frame_{timestamp:05d}.jpg"
 
             if not cv2.imwrite(str(output_path), frame):
                 raise RuntimeError(f"Could not save {output_path}")
@@ -3869,7 +3882,7 @@ def run_vision_test(
     if client is None:
         api_key = os.environ.get("BASETEN_API_KEY")
         if not api_key:
-            raise RuntimeError("BASETEN_API_KEY is not set in the container environment.")
+            raise RuntimeError("BASETEN_API_KEY is not set in the environment.")
         client = OpenAI(api_key=api_key, base_url=BASETEN_BASE_URL)
     else:
         api_key = None
@@ -3969,7 +3982,7 @@ def run_vision_batch(
             api_key = os.environ.get("BASETEN_API_KEY")
             if not api_key:
                 raise RuntimeError(
-                    "BASETEN_API_KEY is not set in the container environment."
+                    "BASETEN_API_KEY is not set in the environment."
                 )
         else:
             api_key = None
@@ -4139,6 +4152,23 @@ if __name__ == "__main__":
         help="Maximum concurrent vision requests for --vision-batch "
         f"(integer 1-{MAX_VISION_BATCH_JOBS}, default {DEFAULT_VISION_BATCH_JOBS}).",
     )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Gameplay video file for default frame extraction "
+        f"(default {VIDEO_PATH}). Only applies to the default mode.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Base output directory holding frames/, observations/, "
+        "events/, commentary/, and script/ "
+        f"(default {PROJECT_ROOT / 'output'}).",
+    )
     args = parser.parse_args()
 
     if args.limit is not None and not args.vision_batch:
@@ -4147,9 +4177,39 @@ if __name__ == "__main__":
         parser.error("--force requires --vision-batch.")
     if args.jobs is not None and not args.vision_batch:
         parser.error("--jobs requires --vision-batch.")
+    offline_mode = (
+        args.vision_test
+        or args.vision_batch
+        or args.migrate_observations
+        or args.rebuild_state
+        or args.detect_events
+        or args.generate_commentary
+        or args.commentary_write
+        or args.generate_script
+    )
+    if args.video is not None and offline_mode:
+        parser.error("--video only applies to default frame extraction.")
+
+    # Resolve the output tree. None means "use the project-root defaults";
+    # the runners below treat None as their standard locations.
+    frames_dir = obs_dir = state_path = None
+    events_path = commentary_path = script_path = None
+    if args.output_dir is not None:
+        base = Path(args.output_dir)
+        frames_dir = base / "frames"
+        obs_dir = base / "observations"
+        state_path = obs_dir / MATCH_STATE_FILENAME
+        events_path = base / "events" / EVENTS_FILENAME
+        commentary_path = base / "commentary" / COMMENTARY_FILENAME
+        script_path = base / "script" / SCRIPT_FILENAME
 
     if args.vision_test:
-        run_vision_test()
+        run_vision_test(
+            frame_path=frames_dir / "frame_00000.jpg"
+            if frames_dir is not None
+            else None,
+            observations_dir=obs_dir,
+        )
     elif args.vision_batch:
         raise SystemExit(
             run_vision_batch(
@@ -4158,19 +4218,64 @@ if __name__ == "__main__":
                 jobs=args.jobs
                 if args.jobs is not None
                 else DEFAULT_VISION_BATCH_JOBS,
+                directory=frames_dir,
+                observations_dir=obs_dir,
             )
         )
     elif args.migrate_observations:
-        raise SystemExit(run_migration())
+        raise SystemExit(
+            run_migration(
+                frames_dir=frames_dir, observations_dir=obs_dir
+            )
+        )
     elif args.rebuild_state:
-        raise SystemExit(run_state_rebuild())
+        raise SystemExit(
+            run_state_rebuild(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                frames_dir=frames_dir,
+            )
+        )
     elif args.detect_events:
-        raise SystemExit(run_detect_events())
+        raise SystemExit(
+            run_detect_events(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                events_path=events_path,
+                frames_dir=frames_dir,
+            )
+        )
     elif args.generate_commentary:
-        raise SystemExit(run_generate_commentary())
+        raise SystemExit(
+            run_generate_commentary(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                events_path=events_path,
+                commentary_path=commentary_path,
+                frames_dir=frames_dir,
+            )
+        )
     elif args.commentary_write:
-        raise SystemExit(run_generate_commentary(writer="llm"))
+        raise SystemExit(
+            run_generate_commentary(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                events_path=events_path,
+                commentary_path=commentary_path,
+                frames_dir=frames_dir,
+                writer="llm",
+            )
+        )
     elif args.generate_script:
-        raise SystemExit(run_generate_script())
+        raise SystemExit(
+            run_generate_script(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                events_path=events_path,
+                commentary_path=commentary_path,
+                script_path=script_path,
+                frames_dir=frames_dir,
+            )
+        )
     else:
-        main()
+        main(video_path=args.video, frames_dir=frames_dir)

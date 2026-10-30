@@ -1,31 +1,36 @@
 # Testing
 
-All runtime verification uses Docker. Never put real secrets in commands;
-use environment-variable references (e.g. `"$BASETEN_API_KEY"`) instead.
+All runtime verification is native: a repository-root `.venv` for Python
+and `npm test` in `electron/` for the integration layer. Never put real
+secrets in commands; use environment-variable references (e.g.
+`"$BASETEN_API_KEY"`) instead.
 
-A successful image build does **not** prove API connectivity. Report build,
+A successful build does **not** prove API connectivity. Report build,
 extraction, and vision-test results separately.
 
-## Image build
+## Python environment
 
 ```sh
-docker compose build
-# or: docker build -t commentator .
+python3 -m venv .venv
+source .venv/bin/activate        # Linux/macOS
+# .venv\Scripts\Activate.ps1     # Windows PowerShell
+pip install -r requirements.txt
 ```
 
 ## Default frame extraction
 
 ```sh
-docker compose run --rm commentator
+.venv/bin/python python/main.py
+# Or: .venv/bin/python python/main.py --video /path/to/clip.mp4 --output-dir /tmp/run1
 ```
 
-Reads `./gameplay/match.mp4`, writes `./output/frames/frame_<timestamp>.jpg`.
+Reads the selected video (default `gameplay/match.mp4`), writes
+`output/frames/frame_<timestamp>.jpg` (or under `--output-dir`).
 
 ## Single-frame vision test
 
 ```sh
-docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
-  commentator python main.py --vision-test
+BASETEN_API_KEY="$BASETEN_API_KEY" .venv/bin/python python/main.py --vision-test
 ```
 
 Sends only `output/frames/frame_00000.jpg` to the configured model,
@@ -38,8 +43,7 @@ non-zero with an `Invalid observation:` error and saves nothing.
 ## Unit tests (deterministic, no API calls)
 
 ```sh
-docker compose run --rm -v "$PWD/tests:/app/tests:ro" \
-  commentator python -m unittest discover -s tests -v
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
 Covers `parse_observation` / `validate_observation` with fixtures for valid
@@ -58,7 +62,9 @@ order, error/timeout isolation, cache skip, `--force`, schema enforcement,
 downstream state/event identity, `--jobs` CLI rules, and client lifecycle
   (internally created clients closed on success/request/validation failure,
   injected clients never closed) — via fake clients
-(see `tests/test_vision_jobs.py`); and writer-mode wording, fallback,
+(see `tests/test_vision_jobs.py`); and CLI wiring of the engine move
+(`--video`, `--output-dir`; see `tests/test_commentary_writer.py`); and
+writer-mode wording, fallback,
 and claim validation via fake writer clients
 (see `tests/test_commentary_writer.py`); and final-script generation —
 valid output, natural paraphrase, invented-identity/kill/causal rejection,
@@ -66,15 +72,17 @@ unconfirmed-echo handling, unknown/duplicate claim ids, malformed/empty
 output, API failure without false success, deliberate silence without a
 model call, history suppression, timestamp/provenance preservation,
 contract validation, atomic-write safety, upstream preservation, and CLI
-wiring — via fake script clients (see `tests/test_script.py`). Tests
-mount read-only into the container; no image change is needed to run them. There are deliberately
+wiring — via fake script clients (see `tests/test_script.py`); and the
+worker protocol — argument parsing, invalid video paths, pure-NDJSON
+stdout, error handling, exit codes, and secret redaction — via fixture
+videos and observations, no paid calls (see `tests/test_worker.py`).
+There are deliberately
 no wall-clock speed assertions in the suite; the synthetic
 sequential-vs-concurrent timing comparison lives in
 `tests/benchmark_jobs.py` (not collected by unittest discovery):
 
 ```sh
-docker compose run --rm -v "$PWD/tests:/app/tests:ro" \
-  commentator python /app/tests/benchmark_jobs.py
+.venv/bin/python tests/benchmark_jobs.py
 ```
 
 It submits 5 uncached mocked requests with a fixed per-request sleep and
@@ -82,32 +90,64 @@ reports elapsed time for `--jobs 1` versus `--jobs 4` plus an output-identity
 check. Its numbers are synthetic (fake sleeps, no network) and must not be
 quoted as a production speedup.
 
+## Electron tests (no dependencies, no API calls)
+
+```sh
+cd electron && npm test
+```
+
+Covers incremental NDJSON parsing (split chunks, multiple messages per
+chunk, invalid lines), IPC input validation, `.venv` interpreter and
+worker-script resolution, and process launch/cancel/cleanup via
+`node:test` (see `electron/test/`).
+
+## Electron build check
+
+```sh
+cd electron && npm run package
+```
+
+Builds the main, preload, and renderer bundles and packages the app. A
+successful package does not prove the worker launches — verify that
+separately (next section).
+
+## Worker check (offline, no API calls)
+
+```sh
+.venv/bin/python python/worker.py /path/to/clip.mp4 --output-dir /tmp/worker-check --skip-vision
+```
+
+Every stdout line must be a JSON protocol message ending with `result`;
+exit code must be `0`. The equivalent Electron-driven check spawns the
+same command through the main process (`process-video` with
+`{skipVision: true}`) and observes the same message stream in the
+renderer. Paid stages are never exercised by these checks.
+
 ## Multi-frame vision batch (offline verification, no API calls)
 
 Selection and reporting without spending inference budget:
 
 ```sh
 # Show what --limit 5 would select from the real extracted frames.
-docker compose run --rm commentator python -c \
-  "from main import discover_candidate_frames, select_spread_frames, OUTPUT_DIR; \
-   c = discover_candidate_frames(OUTPUT_DIR); \
+PYTHONPATH=python .venv/bin/python -c \
+  "from main import discover_candidate_frames, select_spread_frames, FRAMES_DIR; \
+   c = discover_candidate_frames(FRAMES_DIR); \
    print(len(c), [t for t, _ in select_spread_frames(c, 5)])"
 # Exercise the skip path: frame 0 already has a validated observation.
-docker compose run --rm commentator python main.py --vision-batch --limit 1
+.venv/bin/python python/main.py --vision-batch --limit 1
 # Invalid limits fail fast with exit code 2 and no API call.
-docker compose run --rm commentator python main.py --vision-batch --limit 0
+.venv/bin/python python/main.py --vision-batch --limit 0
 # Invalid jobs values fail fast with exit code 2 and no API call.
-docker compose run --rm commentator python main.py --vision-batch --jobs 0 --limit 1
-docker compose run --rm commentator python main.py --vision-batch --jobs 5 --limit 1
+.venv/bin/python python/main.py --vision-batch --jobs 0 --limit 1
+.venv/bin/python python/main.py --vision-batch --jobs 5 --limit 1
 # --jobs without --vision-batch is rejected with exit code 2.
-docker compose run --rm commentator python main.py --jobs 2
+.venv/bin/python python/main.py --jobs 2
 ```
 
 ## Multi-frame vision batch (live, paid)
 
 ```sh
-docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
-  commentator python main.py --vision-batch --limit 5
+.venv/bin/python python/main.py --vision-batch --limit 5
 ```
 
 Analyses up to 5 frames spread across the clip (default when `--limit` is
@@ -133,13 +173,13 @@ and moved by an explicit verified migration:
 # Move validated legacy JSONs to output/observations/ (idempotent).
 # Verifies destination bytes before removing any source; conflicts and
 # invalid files are left in place and reported, exit 1 until resolved.
-docker compose run --rm commentator python main.py --migrate-observations
+.venv/bin/python python/main.py --migrate-observations
 ```
 
 ## Match-state rebuild (offline, no API calls)
 
 ```sh
-docker compose run --rm commentator python main.py --rebuild-state
+.venv/bin/python python/main.py --rebuild-state
 ```
 
 Reads `output/observations/frame_*.json`, validates each file (schema plus
@@ -153,7 +193,7 @@ produces a byte-identical snapshot.
 ## Event detection (offline, no API calls)
 
 ```sh
-docker compose run --rm commentator python main.py --detect-events
+.venv/bin/python python/main.py --detect-events
 ```
 
 Reads `output/observations/frame_*.json` plus the stored
@@ -173,7 +213,7 @@ network calls and never rewrites sources or state.
 ## Commentary generation (offline, no API calls)
 
 ```sh
-docker compose run --rm commentator python main.py --generate-commentary
+.venv/bin/python python/main.py --generate-commentary
 ```
 
 Reads `output/observations/frame_*.json` plus the stored
@@ -195,8 +235,7 @@ sources, state, or events.
 ## Commentary writer (paid, opt-in)
 
 ```sh
-docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
-  commentator python main.py --commentary-write
+BASETEN_API_KEY="$BASETEN_API_KEY" .venv/bin/python python/main.py --commentary-write
 ```
 
 Words the gated claims with a single text-only model call (same endpoint
@@ -210,8 +249,7 @@ it in offline verification.
 ## Final casting script (paid, opt-in)
 
 ```sh
-docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
-  commentator python main.py --generate-script
+BASETEN_API_KEY="$BASETEN_API_KEY" .venv/bin/python python/main.py --generate-script
 ```
 
 Reads the stored observations, `match_state.json`, and `events.json`
@@ -223,9 +261,9 @@ images). Each segment is validated with deterministic paraphrase checks
 (no verbatim-quote requirement) and rejected on any unsupported wording;
 there is no template fallback — provider, parse, or validation failures
 write an explicit `error` status (exit 1), never a false success. Zero
-eligible claims writes `silence` with no model call (exit 0). Output is
-`output/script/script.json` (see `docs/contracts/script-v1.md`), the
-input contract for a future TTS stage; TTS itself is not implemented.
+eligible claims writes a `silence` status with no model call (exit 0).
+Output is `output/script/script.json` (see `docs/contracts/script-v1.md`),
+the input contract for a future TTS stage; TTS itself is not implemented.
 Missing `BASETEN_API_KEY` fails fast before any call. All script tests
 use fake clients (`tests/test_script.py`); never run this command to
 test it without explicit authorization.
@@ -233,19 +271,20 @@ test it without explicit authorization.
 ## Configuration and secret-handling checks
 
 - `.env` exists locally and is git-ignored: `git check-ignore -v .env`
-- `.env` is excluded from the image: check `.dockerignore` contains `.env`
+- `.env.example` documents the required names with no values
 - No secret values in the tree: `git grep -i -E 'sk-|api[_-]?key\s*[:=]\s*\S' -- ':!docs'`
-  (investigate any hit; the `BASETEN_API_KEY` *name* in code/compose is expected)
-- API key never appears in logs: vision errors print `[REDACTED]`
+  (investigate any hit; the `BASETEN_API_KEY` *name* in code is expected)
+- API key never appears in logs: vision errors print `[REDACTED]`, and
+  the worker test suite asserts the key value never reaches stdout/stderr
 
 ## Future unit and integration testing conventions
 
 - Unit tests target parsing, schemas, and event logic — the pure,
   deterministic parts. Prefer fixtures over live API calls.
-- Integration tests run in Docker (`docker compose run`) against recorded
-  frames; live-model tests stay single-frame and opt-in.
+- Integration checks run natively against recorded frames and fixture
+  videos; live-model calls stay single-frame and opt-in.
 - Name tests by stage (e.g. `test_observation_schema.py`,
-  `test_event_detection.py`) and keep them runnable with one command,
-  documented here when the suite exists.
+  `test_event_detection.py`, `test_worker.py`) and keep them runnable
+  with one command, documented here when the suite exists.
 - Report results per `AGENTS.md`: what ran and passed, what failed, and
   what was not run. Inspection alone is never reported as a pass.

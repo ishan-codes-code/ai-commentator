@@ -4,8 +4,8 @@ Uses fixture JPEGs and a fake vision client that sleeps a fixed delay per
 request, so no Baseten calls, credentials, or network are involved. Every
 number printed here is SYNTHETIC: it measures lock-step sleeps under a fake
 client, not real model latency, and must never be quoted as a production
-speedup. Run inside Docker:
-    docker compose run --rm commentator python tests/benchmark_jobs.py
+speedup. Run natively from the repository root:
+    .venv/bin/python tests/benchmark_jobs.py
 """
 
 import json
@@ -16,7 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 TESTS_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(TESTS_DIR.parent))
+sys.path.insert(0, str(TESTS_DIR.parent / "python"))
 sys.path.insert(0, str(TESTS_DIR))
 
 from test_vision_batch import (  # noqa: E402

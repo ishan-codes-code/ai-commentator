@@ -1,11 +1,14 @@
 """Deterministic fixtures for observation-v1 parsing and validation.
 
-No live API calls. Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+No live API calls. Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
 from main import (
     OBSERVATION_CATEGORIES,

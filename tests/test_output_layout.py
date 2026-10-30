@@ -2,9 +2,8 @@
 
 Frames stay in ``frames/``; generated JSON moves to ``observations/``.
 No live API calls; fixture JPEGs are tiny generated images and the
-extraction test uses a tiny synthetic MP4. Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+extraction test uses a tiny synthetic MP4. Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import contextlib
@@ -12,7 +11,9 @@ import io
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from unittest.mock import patch
 
 import cv2

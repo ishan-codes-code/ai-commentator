@@ -11,6 +11,9 @@ acceptance criteria, and what is explicitly out of scope.
 - **Acceptance:** image builds; default command extracts frames from the
   recorded MP4; `--vision-test` returns a description of `frame_00000.jpg`.
 - **Out of scope:** new features, schema work, networking changes.
+- **Status:** superseded. The engine behavior verified here is preserved,
+  but the Docker runtime was replaced by the native desktop platform in
+  milestone 11.
 
 ## 2. Standardize vision output as validated structured JSON
 
@@ -151,3 +154,19 @@ acceptance criteria, and what is explicitly out of scope.
 - **Dependencies:** milestones 6–9.
 - **Acceptance:** live session produces routed commentary audio end to end.
 - **Out of scope:** (end of current plan).
+
+## 11. Native desktop application (Electron + Python)
+
+- **Goal:** run the preserved AI engine as a native desktop app instead
+  of containers, with a defined Electron/Python interface.
+- **Dependencies:** milestones 2–8b (engine behavior preserved, not rebuilt).
+- **Acceptance:** engine moved to `python/main.py` with configurable
+  video/output paths; `python/worker.py` orchestrates the pipeline over
+  NDJSON stdout; Electron launches it via `spawn()`, streams progress
+  over IPC, and supports cancel/cleanup; Python suite and Electron
+  `node:test` suites pass with no paid calls; Docker files removed;
+  production interpreter packaging explicitly out of scope.
+- **Out of scope:** video-selection UI and dashboard, TTS, live capture,
+  OBS, database, FastAPI.
+- **Status:** complete. Next: renderer video-selection UI on the existing
+  `processVideo`/`cancelProcessing`/`onWorkerEvent` API, then milestone 9.

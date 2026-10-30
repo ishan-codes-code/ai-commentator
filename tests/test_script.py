@@ -2,9 +2,8 @@
 
 No live API calls: a fake text-only client stands in for the Baseten
 OpenAI-compatible endpoint, and fixtures reuse the production builders.
-Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import contextlib
@@ -12,7 +11,9 @@ import io
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from types import SimpleNamespace
 from unittest.mock import patch
 

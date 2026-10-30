@@ -3,9 +3,8 @@
 No live API calls: fake clients stand in for the Baseten OpenAI-compatible
 endpoint, and fixture frames are tiny generated JPEGs. No wall-clock speed
 assertions here; the synthetic sequential-vs-concurrent timing comparison
-lives in tests/benchmark_jobs.py. Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+lives in tests/benchmark_jobs.py. Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import argparse
@@ -21,6 +20,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from types import SimpleNamespace
 from unittest.mock import patch
 

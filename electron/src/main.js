@@ -1,19 +1,39 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
+import { createWorkerManager } from './python-worker.mjs';
+import {
+  resolvePythonExecutable,
+  resolveWorkerScript,
+  validateVideoInput,
+} from './worker-protocol.mjs';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
   app.quit();
 }
 
+// Repository root: <root>/electron/.vite/build in dev, <root>/electron/out
+// in packaged builds. Worker and venv paths resolve from here so the app
+// never depends on the process working directory.
+function repoRoot() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, '..');
+  }
+  return path.join(__dirname, '..', '..', '..');
+}
+
+const workerManager = createWorkerManager();
+let mainWindow = null;
+
 const createWindow = () => {
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
-    width: 800,
-    height: 600,
+  mainWindow = new BrowserWindow({
+    width: 900,
+    height: 650,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   });
 
@@ -21,12 +41,17 @@ const createWindow = () => {
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`));
+    mainWindow.loadFile(
+      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
+    );
   }
-
-  // Open the DevTools.
-  mainWindow.webContents.openDevTools();
 };
+
+function sendWorkerEvent(message) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('worker-event', message);
+  }
+}
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
@@ -50,6 +75,90 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Never leave a worker running after the app exits.
+app.on('before-quit', () => {
+  if (workerManager.isBusy()) {
+    // Best effort: the process tree is torn down with the session, but an
+    // explicit terminate avoids a stray paid API call or file write.
+    void workerManager.cancel({ killGraceMs: 1000 });
+  }
+});
+
+ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
+  const inputError = validateVideoInput(videoPath);
+  if (inputError) {
+    return { ok: false, error: inputError };
+  }
+  const opts = options && typeof options === 'object' ? options : {};
+  if (workerManager.isBusy()) {
+    return { ok: false, error: 'A video is already being processed.' };
+  }
+  const root = repoRoot();
+  const { executable, missing } = resolvePythonExecutable(root);
+  if (!executable) {
+    return {
+      ok: false,
+      error:
+        `Python virtual environment not found at ${missing}. ` +
+        'Create it with `python3 -m venv .venv` and install requirements.',
+    };
+  }
+  const { script, missing: missingScript } = resolveWorkerScript(root);
+  if (!script) {
+    return { ok: false, error: `Worker script not found at ${missingScript}.` };
+  }
+  const argv = [script, videoPath];
+  if (opts.outputDir) {
+    argv.push('--output-dir', String(opts.outputDir));
+  }
+  if (opts.limit !== undefined) {
+    argv.push('--limit', String(opts.limit));
+  }
+  if (opts.jobs !== undefined) {
+    argv.push('--jobs', String(opts.jobs));
+  }
+  if (opts.force) {
+    argv.push('--force');
+  }
+  if (opts.skipVision) {
+    argv.push('--skip-vision');
+  }
+  if (opts.withScript) {
+    argv.push('--with-script');
+  }
+  const startedJob = workerManager.start({
+    executable,
+    argv,
+    onMessage: (message) => sendWorkerEvent(message),
+    onStderr: (text) => sendWorkerEvent({ type: 'worker-log', text }),
+    onExit: ({ code, signal, cancelled, spawnError }) => {
+      if (spawnError) {
+        sendWorkerEvent({
+          type: 'error',
+          stage: 'spawn',
+          message: `Could not launch the Python worker: ${spawnError.message}`,
+        });
+        return;
+      }
+      sendWorkerEvent({
+        type: 'worker-exit',
+        code,
+        signal,
+        cancelled: Boolean(cancelled),
+      });
+    },
+  });
+  if (!startedJob.started) {
+    return { ok: false, error: 'A video is already being processed.' };
+  }
+  return { ok: true, pid: startedJob.pid };
+});
+
+ipcMain.handle('cancel-processing', async () => {
+  const stopped = await workerManager.cancel();
+  return { ok: true, stopped };
 });
 
 // In this file you can include the rest of your app's specific main process

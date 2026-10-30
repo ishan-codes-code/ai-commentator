@@ -1,9 +1,8 @@
 """Offline tests for multi-frame vision batch mode (--vision-batch).
 
 No live API calls: a fake client stands in for the Baseten OpenAI-compatible
-endpoint, and fixture frames are tiny generated JPEGs. Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+endpoint, and fixture frames are tiny generated JPEGs. Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import argparse
@@ -13,7 +12,9 @@ import json
 import os
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from types import SimpleNamespace
 from unittest.mock import patch
 
