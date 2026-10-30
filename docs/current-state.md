@@ -8,15 +8,18 @@ Verification note: milestone 2 results were verified by execution on the
 host venv. Milestone 3 (batch), milestone 4 (layout split + state tracker),
 and milestone 5 (event detection) results below were verified inside Docker
 via an escalated shell (the sandboxed shell user lacks daemon access); see
-"Latest verified test results". No live Baseten calls were made in the
-milestone 3, 4, or 5 sessions; the 5 stored observations are from the
-earlier authorized live batch run.
+"Latest verified test results". Milestone 8b (final casting script) results
+below were verified by execution on the host venv (241 tests pass; the
+sandbox Docker daemon is unreachable from this shell, and no
+`Dockerfile`/`compose.yaml` change was needed). No live Baseten calls were
+made in the milestone 3, 4, 5, or 8b sessions; the 5 stored observations
+are from the earlier authorized live batch run.
 
 ## Existing files and responsibilities
 
-- `main.py` — the whole application. Six modes (still one module; the
-  tracker, migration, and detector were kept in `main.py` as the smallest
-  complete changes rather than a speculative split):
+- `main.py` — the whole application. Seven modes (still one module; the
+  tracker, migration, detector, and script stage were kept in `main.py`
+  as the smallest complete changes rather than a speculative split):
   - Default (`python main.py`): extracts frames from `gameplay/match.mp4`
     every 3 seconds (`INTERVAL = 3`) into `output/frames/` as
     `frame_<timestamp>.jpg`, printing FPS, frame count, and duration.
@@ -116,6 +119,22 @@ earlier authorized live batch run.
     per run (closed after); injected clients never closed; missing key
     raises before any call. Silence makes no call. Same output contract,
     same exit codes; `template` names the gating template in both modes.
+  - Script mode (`python main.py --generate-script`, paid opt-in): runs
+    the same validate → gate pipeline plus repeat suppression against the
+    prior script and recent commentary history, then words at most 6
+    prioritized claims with one bounded text-only Muse Spark call (same
+    endpoint/model, never frames or full history). Segments carry natural
+    caster paraphrase validated deterministically (`script_text_valid`:
+    TTS shape, name/number closure, forbidden kill/outcome/action/zone/
+    causal/intent sets, echo uncertainty without certainty language) —
+    no verbatim-quote requirement and no template fallback. Timestamps
+    are derived from cited evidence, never invented. Provider, parse, or
+    validation failure writes an explicit `error` status (exit 1), never
+    a false success; zero eligible claims writes `silence` with no model
+    call (exit 0). Atomically writes `output/script/script.json`
+    (`script-v1`, see `docs/contracts/script-v1.md`); upstream
+    observation, state, event, and commentary files are only read, never
+    rewritten. Missing key fails fast before any call, writing nothing.
 - `Dockerfile` — `python:3.12-slim`, installs `requirements.txt`, copies
   only `main.py` (M7 stayed in `main.py`, so no Docker change was needed),
   creates `/app/output/frames`, creates non-root user
@@ -180,6 +199,11 @@ Live writer (paid, one text-only request — run only with authorization):
 
 `docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" commentator python main.py --commentary-write`
 
+Live final script (paid, one bounded text-only request — run only with
+authorization):
+
+`docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" commentator python main.py --generate-script`
+
 ## Output directory layout
 
 - `output/frames/` — extracted JPEGs only (`frame_<timestamp>.jpg`).
@@ -187,6 +211,8 @@ Live writer (paid, one text-only request — run only with authorization):
   per analysed frame plus the rolling snapshot `match_state.json`.
 - `output/events/` — generated event output only (`events.json`).
 - `output/commentary/` — generated commentary only (`commentary.json`).
+- `output/script/` — generated final casting script only (`script.json`,
+  the TTS input contract; TTS itself is not implemented).
 - Everything under `output/` is git-ignored and Docker-mounted.
 
 ## Required environment variables (names only, no values)
@@ -219,24 +245,32 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 - Unit suite (`tests/test_observation_schema.py` +
   `tests/test_vision_batch.py` + `tests/test_output_layout.py` +
   `tests/test_match_state.py` + `tests/test_event_detection.py` +
-  `tests/test_vision_jobs.py` + `tests/test_commentary.py` + new
-  `tests/test_commentary_writer.py`):
-  **219 tests, all passed**, run inside Docker via the canonical
-  `docker compose run ... python -m unittest discover -s tests` command
-  (escalated shell; sandbox user lacks daemon access). The 26 new
+  `tests/test_vision_jobs.py` + `tests/test_commentary.py` +
+  `tests/test_commentary_writer.py` + new `tests/test_script.py`):
+  **241 tests, all passed**, run on the host venv via
+  `python -m unittest discover -s tests` (the sandbox Docker daemon is
+  unreachable from this shell; `Dockerfile`/`compose.yaml` are untouched,
+  so the container run remains the canonical gate — see `docs/testing.md`).
+  The 22 new script tests cover valid output, natural paraphrase,
+  invented-identity/kill/causal rejection, unconfirmed-echo handling
+  (including the `unconfirmed` vs `confirmed` word-boundary fix),
+  unknown/duplicate claim ids, malformed/empty output, API failure without
+  false success, silence without a model call, history suppression, repeat
+  convergence, timestamp/provenance preservation, contract validation,
+  atomic-write safety, upstream preservation, no TTS dependency, and CLI
+  wiring. First-run failures were caught by the new tests themselves:
+  a 2-tuple unpack of the 3-tuple `load_prior_commentary`, a
+  `WriterAPIError`-is-`RuntimeError` misclassification that skipped the
+  error-status write, and the `confirmed`-inside-`unconfirmed` substring
+  match — all fixed in `main.py` with the tests green afterwards. The 26
   commentary tests cover scene/development/event-echo lines, qualifier
   enforcement, kill/ambiguity/conflict/stale/combat suppression,
   uncertainty scope, repeat + third-run convergence, malformed-prior
   degradation, claim-id stability, silence-as-success, stale snapshot and
   events refusal, malformed-input rejection, template/confidence/token/
-  evidence validation failures, and upstream preservation. First-run
-  failures were test-side only (fixture reads after temp-dir cleanup —
-  the same bug class as M6 — plus one expectation that missed the scene/
-  development subsumption rule); one genuine design fix followed (repeat
-  suppression now reads prior `already-emitted` records so silence
-  converges instead of oscillating). Earlier suites' first-run failures
-  were likewise test-side only (plus one stale-image run); no unrelated
-  product change was needed.
+  evidence validation failures, and upstream preservation. Earlier
+  suites' first-run failures were likewise test-side only (plus one
+  stale-image run); no unrelated product change was needed.
   Earlier milestone-5 first-run failures were likewise test- or
   fixture-side only; product fixes were limited to unifying rejected-file
   reporting, nearest-scope attribution, and sentence masking.
@@ -259,6 +293,14 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
   byte-identical; sources and state verified unchanged afterwards. Zero
   events is the honest result: the kill feed is mentioned but never
   transcribed, and no team-scoped elim counter repeats across frames.
+- Script CLI on the real tree (offline checks, no key, no network):
+  **passed** — `python main.py --generate-script` with `BASETEN_API_KEY`
+  unset loads the real observations/state/events, gates claims, and fails
+  fast with `Script failed: BASETEN_API_KEY is not set...` (exit 1),
+  writing nothing; `python main.py --help` lists `--generate-script`.
+  No live script call has been made, so no `output/script/script.json`
+  exists yet. A genuine LLM-authored `script.json` still requires one
+  authorized paid run (see next commands below).
 - Synthetic positive check (offline, fixtures in container `/tmp`, repo
   untouched): a team AG `Elim 4` → `Elim 5` pair emits one
   `elim_count_increased` candidate with both provenances quoted.
@@ -290,9 +332,10 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 TTS/audio playback, live capture, OBS integration,
 Free Fire knowledge pack. (Multi-frame runs, output separation,
 match-state tracking, conservative event detection, bounded batch
-concurrency, evidence-grounded commentary, and the LLM writer path are
-implemented and verified (writer verified on fixtures with fakes only;
-no live writer call has been made). Cosmetic note: worker-thread
+concurrency, evidence-grounded commentary, the LLM writer path, and the
+final LLM casting script are implemented and verified (writer and script
+verified on fixtures with fakes only; no live writer or script call has
+been made). Cosmetic note: worker-thread
 progress lines may interleave on stdout under `--jobs 2+`; the saved-file
 record and final summary always print deterministically from the main
 thread.)

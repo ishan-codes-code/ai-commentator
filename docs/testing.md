@@ -60,8 +60,14 @@ downstream state/event identity, `--jobs` CLI rules, and client lifecycle
   injected clients never closed) — via fake clients
 (see `tests/test_vision_jobs.py`); and writer-mode wording, fallback,
 and claim validation via fake writer clients
-(see `tests/test_commentary_writer.py`). Tests mount read-only into the
-container; no image change is needed to run them. There are deliberately
+(see `tests/test_commentary_writer.py`); and final-script generation —
+valid output, natural paraphrase, invented-identity/kill/causal rejection,
+unconfirmed-echo handling, unknown/duplicate claim ids, malformed/empty
+output, API failure without false success, deliberate silence without a
+model call, history suppression, timestamp/provenance preservation,
+contract validation, atomic-write safety, upstream preservation, and CLI
+wiring — via fake script clients (see `tests/test_script.py`). Tests
+mount read-only into the container; no image change is needed to run them. There are deliberately
 no wall-clock speed assertions in the suite; the synthetic
 sequential-vs-concurrent timing comparison lives in
 `tests/benchmark_jobs.py` (not collected by unittest discovery):
@@ -200,6 +206,29 @@ Missing `BASETEN_API_KEY` fails fast before any call. All writer tests
 use fake clients (`tests/test_commentary_writer.py`); never run the
 writer to test it without explicit authorization, and never default to
 it in offline verification.
+
+## Final casting script (paid, opt-in)
+
+```sh
+docker compose run --rm -e BASETEN_API_KEY="$BASETEN_API_KEY" \
+  commentator python main.py --generate-script
+```
+
+Reads the stored observations, `match_state.json`, and `events.json`
+(refusing stale inputs exactly like commentary generation), gates claims
+with the existing logic, suppresses repeats against the prior script and
+recent commentary history, then words at most 6 prioritized claims with a
+single text-only model call (same endpoint and model as vision, no
+images). Each segment is validated with deterministic paraphrase checks
+(no verbatim-quote requirement) and rejected on any unsupported wording;
+there is no template fallback — provider, parse, or validation failures
+write an explicit `error` status (exit 1), never a false success. Zero
+eligible claims writes `silence` with no model call (exit 0). Output is
+`output/script/script.json` (see `docs/contracts/script-v1.md`), the
+input contract for a future TTS stage; TTS itself is not implemented.
+Missing `BASETEN_API_KEY` fails fast before any call. All script tests
+use fake clients (`tests/test_script.py`); never run this command to
+test it without explicit authorization.
 
 ## Configuration and secret-handling checks
 

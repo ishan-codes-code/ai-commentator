@@ -118,11 +118,31 @@ acceptance criteria, and what is explicitly out of scope.
   wiring — all offline with fakes. Live writer runs remain opt-in and
   unverified.
 
+## 8b. Evidence-grounded LLM casting script (final deliverable before TTS)
+
+- **Goal:** a genuine TTS-ready esports casting script over the gated
+  milestone-7 claims, with paraphrase allowed but evidence safety kept.
+- **Dependencies:** milestones 2–8.
+- **Acceptance:** `output/script/script.json` validates against
+  `script-v1`; paraphrased facts pass, invented identities/numbers/
+  outcomes/actions/causes and confirmed-echo wordings are rejected;
+  provider or validation failure reports an explicit error, never a
+  false success; silence needs no model call; no live calls in tests.
+- **Out of scope:** audio output (TTS consumes `script-v1` in milestone 9).
+- **Status:** complete. `--generate-script` reuses the Baseten/Muse Spark
+  endpoint with one bounded text-only request per run (at most 6
+  prioritized claims plus recent history, never frames or full history),
+  validates every segment deterministically (names, numbers, forbidden
+  semantic sets, echo uncertainty), derives timestamps from evidence,
+  and fails safe with no template fallback. 22 fixture tests cover the
+  acceptance cases — all offline with fakes. Live script runs remain
+  opt-in and unverified.
+
 ## 9. Integrate TTS and audio playback
 
 - **Goal:** speak commentary locally.
-- **Dependencies:** milestones 7–8.
-- **Acceptance:** text produces playable audio locally.
+- **Dependencies:** milestones 7–8b (TTS consumes `script-v1` segments).
+- **Acceptance:** each script segment's text produces playable audio locally.
 - **Out of scope:** live capture, OBS.
 
 ## 10. Integrate live capture and OBS output
