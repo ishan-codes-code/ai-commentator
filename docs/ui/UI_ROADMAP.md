@@ -13,7 +13,8 @@ otherwise.
 - [x] shadcn manual setup for the Forge/Vite layout: `components.json`
   (`tsx: false`, Tailwind v4, `src/index.css`), `@/` alias (Vite +
   `jsconfig.json`), initial components
-  (button, card, badge, separator, skeleton).
+  (button, card, badge, separator, skeleton; alert + spinner added in
+  Stage 1).
 - [x] Obsidian tokens in `index.css`; six `docs/ui/` documents; AGENTS.md
   UI section.
 - [x] App shell: `AppLayout` + `Sidebar` + `PageHeader` + `GlassPanel` /
@@ -23,10 +24,21 @@ otherwise.
   nav, empty dashboard, live worker status, no console errors; tokens,
   alias, and reduced-motion verified.
 
-## Stage 1 — Video selection + processing wiring
+## Stage 1 — Video selection + processing wiring (implemented, on `feature/video-import-processing`, uncommitted)
 
 - Depends on: Stage 0.
-- File picker (later: path input) calling `window.api.processVideo`
+- [x] Approved exception: `select-video` IPC (read-only native
+  `dialog.showOpenDialog` + main-side validation/size; `selectVideo`
+  in `preload.js`). No filesystem access reaches the renderer.
+- [x] `VideoImport`: native picker, metadata (name/ext/size/path),
+  `file://` preview with honest fallback, offline-safe
+  `processVideo(path, { skipVision: true })` default, single-submit
+  guard, Replace/Remove.
+- [x] `RunPanel`: stage-level progress with skipped-stage honesty,
+  cancel via `cancelProcessing` (confirmed by worker lifecycle),
+  result summary from real `result` fields, human-readable errors.
+  Pure `lib/worker-view.js` mapper with settled-gating + unit tests.
+- Processing uses `window.api.processVideo`
   with main-process validation; cancel via `cancelProcessing`; progress
   and stage display through the existing worker-event subscription;
   result/error surfacing with artifacts from the `result` message.

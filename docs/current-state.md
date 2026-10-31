@@ -262,7 +262,8 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 ## Not implemented yet
 
 TTS/audio playback, live capture, OBS integration,
-Free Fire knowledge pack, video-selection UI and dashboard. (Multi-frame
+Free Fire knowledge pack, and dashboard artifact browsing.
+(Stage 1 video selection + run wiring is implemented, see below. Multi-frame
 runs, output separation, match-state tracking, conservative event
 detection, bounded batch concurrency, evidence-grounded commentary, the
 LLM writer path, the final LLM casting script, the Electron worker
@@ -293,9 +294,29 @@ thread.)
   console errors. Forbidden areas untouched (Python, worker protocol,
   main/preload, security settings, model ID).
 
+## Stage 1 — video import and processing (on `feature/video-import-processing`, uncommitted)
+
+- Approved exception to the renderer-only rule: `select-video` IPC
+  (`dialog.showOpenDialog` + `ipcMain.handle` in `main.js`, `selectVideo`
+  in `preload.js`). Read-only native dialog, main-side validation,
+  `sizeBytes` via `fs.statSync`; no filesystem access reaches the
+  renderer. `nodeIntegration`/`contextIsolation` unchanged.
+- `VideoImport` (selection, `file://` preview with honest fallback,
+  metadata) + `RunPanel` (stage-level progress, skipped-stage honesty,
+  cancel, result summary from real `result` fields, human-readable
+  errors) in the Dashboard; `WorkerStatus` preserved.
+- Pure `lib/worker-view.js` mapper (settled-gating so a new run starts
+  only after the previous worker exits) + `lib/format.js` helpers, both
+  covered by `electron/test/worker-view.test.mjs`.
+- Default run is offline-safe: `processVideo(path, { skipVision: true })`,
+  no API key needed, no paid calls. `withScript` never enabled by default.
+- Docs synced: `UI_ARCHITECTURE.md` (current structure, 4-function
+  bridge), `COMPONENT_GUIDELINES.md` (`PageHeader` under `layout/`),
+  `AGENTS.md` bridge lists, `UI_ROADMAP.md` Stage 1 acceptance.
+
 ## Recommended next milestone
 
-Video-selection UI and dashboard in the Electron renderer (drive the
-existing `processVideo`/`cancelProcessing`/`onWorkerEvent` API), then
+Dashboard artifact browsing in the Electron renderer (read-only views
+over the run `output/` tree), then
 roadmap milestone 9 (TTS and audio playback).
 See [roadmap.md](roadmap.md).

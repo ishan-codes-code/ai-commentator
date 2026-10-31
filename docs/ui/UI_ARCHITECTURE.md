@@ -7,8 +7,17 @@ see [../architecture.md](../architecture.md) and
 
 ## Current implementation (verified in repo)
 
-- `electron/src/renderer.jsx` — React entry, renders `Hello` + `WorkerStatus`.
-- `electron/src/components/Hello.jsx` — placeholder demo heading.
+- `electron/src/renderer.jsx` — React entry, renders `App` (fonts + `MotionConfig reducedMotion="user"`).
+- `electron/src/app/` — `App.jsx` shell with section state; `sections/`
+  `DashboardSection` (video import + runs), `MatchesSection`,
+  `CommentarySection`, `SettingsSection` (honest stubs).
+- `electron/src/layout/` — `AppLayout`, `Sidebar`, `PageHeader`.
+- `electron/src/primitives/` — `GlassPanel`, `GlassCard`, `StatusIndicator`.
+- `electron/src/components/VideoImport.jsx` — selection, preview, and
+  run lifecycle over the audited `window.api` bridge (offline-safe
+  `{ skipVision: true }` default).
+- `electron/src/components/RunPanel.jsx` — presentational run states
+  driven by `lib/worker-view.js`.
 - `electron/src/components/WorkerStatus.jsx` — subscribes to
   `window.api.onWorkerEvent`, renders idle/processing/done/error states.
   This is the only renderer feature with backend behavior and must keep
@@ -42,10 +51,13 @@ electron/src/
     StatusIndicator.jsx   # status dot + label (idle/processing/done/error)
   components/
     WorkerStatus.jsx      # worker bridge subscriber (existing behavior)
+    VideoImport.jsx       # selection, preview, run lifecycle
+    RunPanel.jsx          # presentational run states (progress/result/error)
     ui/                   # generated shadcn components (do not hand-edit)
   lib/
     tokens.js             # motion durations, easings, shared constants
     worker-view.js        # pure mapping: worker message → view state (testable)
+    format.js             # pure display helpers (bytes, names, file URLs)
 ```
 
 Feature-based sections own their content; `layout/` owns the frame;
@@ -83,7 +95,10 @@ primitives. No section reaches past the layout layer into another section.
 ## State and data rules
 
 - The renderer is a thin client over `window.api` (`processVideo`,
-  `cancelProcessing`, `onWorkerEvent`). No other backend surface exists.
+  `cancelProcessing`, `onWorkerEvent`, `selectVideo`). The `selectVideo`
+  addition (Stage 1, approved exception) is a read-only native dialog
+  plus main-side validation — no filesystem access reaches the renderer.
+  No other backend surface exists.
 - Never invent worker data: unimplemented sections render honest empty
   states, never fake pipelines or mocked processing.
 - Event handling follows the existing `WorkerStatus` pattern (subscribe in
@@ -92,5 +107,8 @@ primitives. No section reaches past the layout layer into another section.
 
 ## What changes next (not now)
 
-Video-selection flow, dashboard data wiring, and any store/router adoption
+Stage 1 delivered video selection and run wiring (this document's
+Dashboard no longer a stub). Remaining:
+
+Artifact browsing, and any store/router adoption
 are staged in [UI_ROADMAP.md](UI_ROADMAP.md).

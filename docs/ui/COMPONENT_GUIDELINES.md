@@ -71,10 +71,10 @@ Structure: [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md).
 
 ## Reusable boundaries
 
-- `primitives/` (GlassPanel, GlassCard, StatusIndicator, PageHeader):
+- `primitives/` (GlassPanel, GlassCard, StatusIndicator):
   stateless, token-driven, no IPC. New shared visuals go here only after
   a second use-site appears — one-offs stay in their section.
-- `layout/` (AppLayout, Sidebar): frame only, no data fetching.
+- `layout/` (AppLayout, Sidebar, PageHeader): frame only, no data fetching.
 - Do not duplicate: search `primitives/` and `ui/` before creating a
   variant; similar-looking custom divs in two sections are a merge
   candidate, not a pattern.

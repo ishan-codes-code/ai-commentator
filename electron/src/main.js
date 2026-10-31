@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWorkerManager } from './python-worker.mjs';
@@ -159,6 +160,48 @@ ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
 ipcMain.handle('cancel-processing', async () => {
   const stopped = await workerManager.cancel();
   return { ok: true, stopped };
+});
+
+ipcMain.handle('select-video', async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: 'Application window is not available.' };
+  }
+  let selection;
+  try {
+    selection = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select gameplay video',
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Videos',
+          extensions: ['mp4', 'avi', 'mov', 'mkv', 'webm'],
+        },
+      ],
+    });
+  } catch {
+    return { ok: false, error: 'Could not open the file dialog.' };
+  }
+  if (selection.canceled || selection.filePaths.length === 0) {
+    return { ok: true, cancelled: true };
+  }
+  const filePath = selection.filePaths[0];
+  const inputError = validateVideoInput(filePath);
+  if (inputError) {
+    return { ok: false, error: inputError };
+  }
+  let sizeBytes = null;
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isFile()) {
+      sizeBytes = stat.size;
+    }
+  } catch {
+    sizeBytes = null;
+  }
+  if (sizeBytes === null) {
+    return { ok: false, error: 'The selected file could not be read.' };
+  }
+  return { ok: true, path: filePath, sizeBytes };
 });
 
 // In this file you can include the rest of your app's specific main process

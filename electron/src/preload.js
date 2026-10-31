@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   processVideo: (videoPath, options) =>
     ipcRenderer.invoke('process-video', videoPath, options ?? {}),
   cancelProcessing: () => ipcRenderer.invoke('cancel-processing'),
+  selectVideo: () => ipcRenderer.invoke('select-video'),
   onWorkerEvent: (callback) => {
     if (typeof callback !== 'function') {
       throw new TypeError('callback must be a function.');
