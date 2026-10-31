@@ -9,20 +9,28 @@ see [../architecture.md](../architecture.md) and
 
 - `electron/src/renderer.jsx` — React entry, renders `App` (fonts + `MotionConfig reducedMotion="user"`).
 - `electron/src/app/` — `App.jsx` shell with section state; `sections/`
-  `DashboardSection` (video import + runs), `MatchesSection`,
-  `CommentarySection`, `SettingsSection` (honest stubs).
-- `electron/src/layout/` — `AppLayout`, `Sidebar`, `PageHeader`.
+  includes the project library, project workspace, analysis/commentary
+  views, settings, and honest prompt/audio placeholders.
+- `electron/src/layout/` — `AppLayout`, `Sidebar`, and `AppHeader`;
+  navigation collapse is controlled by `App`, while inspector visibility is
+  controlled at the workspace boundary and exposed in the header.
+- `electron/src/app/sections/workspace/` — `ProjectWorkspaceLayout` owns the
+  fixed editor grid and dock; `EditorCenter` owns preview/artifact tabs;
+  `ProcessingInspector` presents existing run state and project information;
+  `DockedWorkspace` hosts bottom-panel tabs (Audio only today).
 - `electron/src/primitives/` — `GlassPanel`, `GlassCard`, `StatusIndicator`.
-- `electron/src/components/VideoImport.jsx` — selection, preview, and
-  run lifecycle over the audited `window.api` bridge (offline-safe
-  `{ skipVision: true }` default).
+- `electron/src/app/sections/DashboardSection.jsx` — project creation,
+  listing, opening, and deletion through the audited `window.api` bridge.
+- `electron/src/app/sections/WorkspaceSection.jsx` — project loading,
+  project-bound processing and its single worker subscription; it composes
+  the workspace regions.
 - `electron/src/components/RunPanel.jsx` — presentational run states
   driven by `lib/worker-view.js`.
-- `electron/src/components/WorkerStatus.jsx` — subscribes to
-  `window.api.onWorkerEvent`, renders idle/processing/done/error states.
-  This is the only renderer feature with backend behavior and must keep
-  working unchanged in spirit (restyle allowed, mock state forbidden).
-- `electron/src/index.css` — Tailwind v4 entry, `@theme` Obsidian tokens.
+- `electron/src/components/WorkerStatus.jsx` — dashboard worker status;
+  `AppHeader` also reads live status through `useWorkerStatus`. Worker
+  state comes only from real events, never mock state.
+- `electron/src/index.css` — Tailwind v4 entry, `@theme` monochrome studio
+  tokens.
 - `electron/src/components/ui/*` — shadcn primitives (button, card, badge,
   separator, skeleton). Generated code; edit only to fix integration bugs.
 - `electron/src/lib/` — `cn` via the `cn` package; app-owned helpers
@@ -104,6 +112,9 @@ primitives. No section reaches past the layout layer into another section.
   Projects live under Electron `userData` (see `project-store.mjs`);
   All paths, validation, and atomic writes stay main-side — no
   filesystem access reaches the renderer. No other backend surface exists.
+- Project workspaces are fixed to the Electron viewport. Scroll stays within
+  the inspector, artifact view, or global library section. The dock uses a
+  fixed height because no panel-resizing dependency is installed.
 - Never invent worker data: unimplemented sections render honest empty
   states, never fake pipelines or mocked processing.
 - Event handling uses the shared `useWorkerStatus` hook (subscribe in

@@ -4,9 +4,9 @@ import { Badge } from '@/components/ui/badge.jsx';
 import { Button } from '@/components/ui/button.jsx';
 import { Separator } from '@/components/ui/separator.jsx';
 import { Spinner } from '@/components/ui/spinner.jsx';
-import GlassCard from '@/primitives/GlassCard.jsx';
 import StatusIndicator from '@/primitives/StatusIndicator.jsx';
 import { STAGE_LABELS, stageDetailText, stageLabel } from '@/lib/worker-view.js';
+import { cn } from 'cn';
 
 const STATUS_LABELS = {
   processing: 'Processing',
@@ -58,14 +58,6 @@ function ResultRows({ result }) {
           <dd className="font-mono text-[13px] text-foreground">{String(value)}</dd>
         </div>
       ))}
-      {result.output_dir ? (
-        <div className="flex flex-col gap-1 pt-1">
-          <dt className="text-xs text-subtle">Output directory</dt>
-          <dd className="truncate font-mono text-xs text-muted-foreground">
-            {result.output_dir}
-          </dd>
-        </div>
-      ) : null}
     </dl>
   );
 }
@@ -83,6 +75,9 @@ export default function RunPanel({
   onRetry,
   onChooseDifferent,
   chooseDifferentLabel = "Choose different video",
+  showActions = true,
+  showStatus = true,
+  className,
 }) {
   const indicatorStatus =
     run.status === 'completed'
@@ -99,24 +94,24 @@ export default function RunPanel({
   ];
 
   return (
-    <GlassCard className="flex flex-col gap-4 p-5">
-      <div
-        aria-live="polite"
-        className="flex flex-wrap items-center justify-between gap-2"
-      >
-        <StatusIndicator
-          status={indicatorStatus}
-          label={STATUS_LABELS[run.status] ?? run.status}
-        />
-        {run.totalStages > 0 ? (
-          <span className="font-mono text-xs text-muted-foreground">
-            {run.currentStage
-              ? `${stageLabel(run.currentStage)} · `
-              : null}
-            {run.completedCount}/{run.totalStages} stages
-          </span>
-        ) : null}
-      </div>
+    <div className={cn("flex min-w-0 flex-col gap-3", className)}>
+      {showStatus ? (
+        <div
+          aria-live="polite"
+          className="flex flex-wrap items-center justify-between gap-2"
+        >
+          <StatusIndicator
+            status={indicatorStatus}
+            label={STATUS_LABELS[run.status] ?? run.status}
+          />
+          {run.totalStages > 0 ? (
+            <span className="font-mono text-xs text-muted-foreground">
+              {run.currentStage ? `${stageLabel(run.currentStage)} · ` : null}
+              {run.completedCount}/{run.totalStages} stages
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {orderedStages.length > 0 ? (
         <>
@@ -169,7 +164,7 @@ export default function RunPanel({
               ? stageLabel(run.error.stage)
               : 'Processing failed'}
           </AlertTitle>
-          <AlertDescription>{run.error.message}</AlertDescription>
+          <AlertDescription className="min-w-0 [overflow-wrap:anywhere]">{run.error.message}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -184,11 +179,11 @@ export default function RunPanel({
         <Alert variant="destructive">
           <TriangleAlert />
           <AlertTitle>Could not cancel</AlertTitle>
-          <AlertDescription>{cancelError}</AlertDescription>
+          <AlertDescription className="min-w-0 [overflow-wrap:anywhere]">{cancelError}</AlertDescription>
         </Alert>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
+      {showActions ? <div className="flex flex-wrap gap-2">
         {run.status === 'processing' ? (
           <Button
             type="button"
@@ -219,7 +214,7 @@ export default function RunPanel({
             </Button>
           </>
         ) : null}
-      </div>
-    </GlassCard>
+      </div> : null}
+    </div>
   );
 }

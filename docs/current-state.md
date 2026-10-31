@@ -1,5 +1,27 @@
 # Current state
 
+## Commentary Studio UI foundation
+
+The Electron renderer opens into a 900 × 650 windowed studio shell with a
+toggleable navigation sidebar and live worker-status header. An open project
+uses a bounded editor with independently toggleable processing/project
+inspector, central Preview and Artifacts tabs, and a docked tabbed bottom
+workspace. Audio is the only implemented bottom panel and shows honest empty
+playback lanes at a fixed height. Processing actions/status and source details
+remain project-scoped; artifact browsing stays project-scoped. Project source
+preview uses the main-process `project://` protocol under both development
+and packaged origins; it only serves the source filename recorded in project
+metadata. The preview keeps native video controls and contains the source in a
+dark, constrained stage. It reports available playback time, duration, source
+dimensions, and playback status, with separate empty, loading, and playback
+error states. Seeking beyond buffered video content can still fail; that media
+protocol limitation remains unresolved. Prompt inspection and standalone audio
+playback remain placeholders. The right inspector separates Processing,
+Configure, and Project information into fixed-header tabs with independently
+scrolling content; processing details remain driven by the worker view state.
+The UI palette is monochromatic with semantic status accents. Window size and
+lifecycle are unchanged. No Python engine or worker protocol behavior changed.
+
 ## Modularization status
 
 Project storage is implemented under `electron/src/project-store/`: `metadata.mjs`

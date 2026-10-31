@@ -24,9 +24,8 @@ proportions, and flat layered surfaces.
 2. **Hierarchy through type and space.** One type scale, tight tracking
    on headings, 13px UI body, 12px metadata, mono for technical values.
    Generous but consistent spacing on a 4px base.
-3. **One accent, used sparingly.** Violet marks primary actions and the
-   single active state. Ice Blue is reserved for technical/live signals.
-   Status colors speak only for status.
+3. **Monochrome by default.** White and charcoal establish action and
+   selection hierarchy. Color is reserved for semantic status feedback.
 4. **Flat depth.** Separation comes from surface steps and 1px borders,
    not shadows, glows, or stacked floating panels. One ambient treatment
    at most, kept static and subtle.
@@ -35,13 +34,14 @@ proportions, and flat layered surfaces.
 
 ## Color direction
 
-- Canvas: near-black `#030304`; surfaces step up deliberately
-  (`#08080A` → `#0C0C10` → `#121218`).
-- Borders are solid `#1C1C24` hairlines — no translucent glow borders
+- Canvas: near-black `#09090A`; surfaces step up deliberately
+  (`#101011` → `#171718` → `#202021`).
+- Borders are solid `#2A2A2B` hairlines — no translucent glow borders
   on layout surfaces.
-- Text: `#F5F5F7` primary; `#92929D` secondary body; `#686873`
-  metadata only (below body-contrast floor, never for content).
-- Primary Electric Violet `#9670FF`, secondary Ice Blue `#38BDF8`.
+- Text: `#F1F1F1` primary; `#A1A1A4` secondary body; `#77777B`
+  metadata.
+- Primary actions use a light neutral surface with dark text; active
+  navigation uses a restrained charcoal surface.
   Status: green `#22C55E`, amber `#F59E0B`, red `#EF4444`.
 - All component styling references **semantic tokens**
   (`bg-background`, `text-muted-foreground`, `border-border`, …),
