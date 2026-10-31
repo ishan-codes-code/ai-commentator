@@ -274,6 +274,25 @@ progress lines may interleave on stderr under `--jobs 2+`; the saved-file
 record and final summary always print deterministically from the main
 thread.)
 
+## Renderer UI foundation (Stage 0, on `feature/ui-setup`, uncommitted)
+
+- Obsidian AI design system documented in `docs/ui/` (identity, tokens,
+  architecture, component/motion guidelines, roadmap).
+- Renderer stack: React 19 + Vite 5 + Tailwind v4 (CSS-first `@theme`
+  tokens in `electron/src/index.css`), shadcn manual setup
+  (`components.json`, `tsx: false`, `@/` alias via renderer Vite config
+  + `jsconfig.json`; generated `button`, `card`, `badge`, `separator`,
+  `skeleton`), `motion` (via `motion/react`), `lucide-react`,
+  `@fontsource` Inter + Geist Mono.
+- App shell: `AppLayout` + `Sidebar` (Dashboard/Matches/Commentary/
+  Settings, active `layoutId` indicator), `PageHeader`, `GlassPanel` /
+  `GlassCard` / `StatusIndicator` primitives, honest empty dashboard +
+  stubs; `WorkerStatus` bridge logic unchanged (restyled).
+- Verified: `npm test` 15/15; renderer `vite build` clean with token
+  utilities present; dev app boots with renderer connected and no app
+  console errors. Forbidden areas untouched (Python, worker protocol,
+  main/preload, security settings, model ID).
+
 ## Recommended next milestone
 
 Video-selection UI and dashboard in the Electron renderer (drive the

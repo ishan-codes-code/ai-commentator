@@ -1,9 +1,104 @@
 @import "tailwindcss";
 
+:root {
+  color-scheme: dark;
+
+  /* Obsidian AI raw palette */
+  --obsidian-950: #09090b;
+  --obsidian-900: #111114;
+  --obsidian-850: #18181f;
+  --obsidian-800: #22222b;
+
+  /* Semantic tokens (dark-only theme) */
+  --background: var(--obsidian-950);
+  --foreground: #fafafa;
+  --card: var(--obsidian-900);
+  --card-foreground: #fafafa;
+  --popover: var(--obsidian-850);
+  --popover-foreground: #fafafa;
+  --primary: #8b5cf6;
+  --primary-foreground: #fafafa;
+  --secondary: #38bdf8;
+  --secondary-foreground: #09090b;
+  --muted: var(--obsidian-800);
+  --muted-foreground: #a1a1aa;
+  --accent: var(--obsidian-800);
+  --accent-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #fafafa;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --border: rgba(255, 255, 255, 0.09);
+  --input: rgba(255, 255, 255, 0.09);
+  --ring: #8b5cf6;
+
+  /* Project surfaces */
+  --surface: var(--obsidian-900);
+  --elevated: var(--obsidian-800);
+  --glass: rgba(24, 24, 31, 0.78);
+  --glass-border: rgba(255, 255, 255, 0.12);
+
+  --radius: 0.5625rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle: #71717a;
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-glass: var(--glass);
+  --color-glass-border: var(--glass-border);
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 3px);
+  --radius-xl: calc(var(--radius) + 7px);
+  --radius-card: 0.75rem;
+  --radius-panel: 1rem;
+  --radius-dialog: 1.125rem;
+
+  --backdrop-blur-glass: 16px;
+
+  --shadow-panel: 0 24px 64px -24px rgba(0, 0, 0, 0.7);
+  --shadow-overlay: 0 16px 48px -12px rgba(0, 0, 0, 0.8);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
-    Arial, sans-serif;
-  margin: auto;
-  max-width: 38rem;
-  padding: 2rem;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  margin: 0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
 }
