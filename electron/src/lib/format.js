@@ -43,6 +43,15 @@ export function extensionOf(filePath) {
  * Returns '' for anything that is not a usable absolute path.
  */
 /**
+ * Project-scoped media URL for the main-process `project://` protocol.
+ * Only ever built from main-listed ids, scopes, and filenames — never
+ * from free-form user input.
+ */
+export function projectMediaUrl(projectId, scope, name) {
+  return `project://${projectId}/${scope}/${name}`;
+}
+
+/**
  * Human relative time ("3h ago") for `lastOpenedAt` display.
  * Returns an em dash for unparseable input, never throws.
  */

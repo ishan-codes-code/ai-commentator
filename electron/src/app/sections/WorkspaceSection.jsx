@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator.jsx";
 import { Spinner } from "@/components/ui/spinner.jsx";
 import GlassCard from "@/primitives/GlassCard.jsx";
 import StatusIndicator from "@/primitives/StatusIndicator.jsx";
+import ArtifactBrowser from "@/components/ArtifactBrowser.jsx";
 import RunPanel from "@/components/RunPanel.jsx";
 import {
   applyWorkerMessage,
@@ -25,6 +26,7 @@ const STATUS_LABELS = {
   done: "Done",
   error: "Error",
   cancelled: "Cancelled",
+  interrupted: "Interrupted",
 };
 
 const STATUS_BADGE = {
@@ -33,6 +35,7 @@ const STATUS_BADGE = {
   done: "secondary",
   error: "destructive",
   cancelled: "outline",
+  interrupted: "outline",
 };
 
 function AudioLane({ icon: Icon, title, children }) {
@@ -338,6 +341,16 @@ export default function WorkspaceSection({ projectId, onBack }) {
             </Button>
           ) : null}
         </div>
+        {project.processingStatus === "interrupted" &&
+        run.status === "idle" ? (
+          <Alert variant="default">
+            <AlertTitle>Previous run was interrupted</AlertTitle>
+            <AlertDescription>
+              The application closed while this project was processing.
+              Nothing was marked complete — start a new run when ready.
+            </AlertDescription>
+          </Alert>
+        ) : null}
         <p className="text-xs text-muted-foreground">
           Offline-safe: vision analysis is skipped, so no API key is needed
           and no paid calls are made. Output stays inside this project.
@@ -370,6 +383,8 @@ export default function WorkspaceSection({ projectId, onBack }) {
           chooseDifferentLabel="Back to projects"
         />
       ) : null}
+
+      <ArtifactBrowser projectId={project.id} refreshSignal={run.status} />
     </div>
   );
 }

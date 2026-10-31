@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('api', {
   openProject: (id) => ipcRenderer.invoke('open-project', id),
   updateProject: (id, patch) => ipcRenderer.invoke('update-project', id, patch),
   deleteProject: (id) => ipcRenderer.invoke('delete-project', id),
+  listArtifacts: (id) => ipcRenderer.invoke('list-artifacts', id),
+  readArtifact: (id, kind, name) =>
+    ipcRenderer.invoke('read-artifact', id, kind, name),
   onWorkerEvent: (callback) => {
     if (typeof callback !== 'function') {
       throw new TypeError('callback must be a function.');

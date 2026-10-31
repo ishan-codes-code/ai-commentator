@@ -98,7 +98,9 @@ primitives. No section reaches past the layout layer into another section.
 - The renderer is a thin client over `window.api` (`processVideo`
   with optional `projectId` binding, `cancelProcessing`, `onWorkerEvent`,
   `selectVideo`, plus project CRUD: `list-projects`, `create-project`,
-  `open-project`, `update-project`, `delete-project`).
+  `open-project`, `update-project`, `delete-project`, `list-artifacts`,
+  `read-artifact`). Media renders over the privileged `project://`
+  scheme (validated main-side, bare 404s).
   Projects live under Electron `userData` (see `project-store.mjs`);
   All paths, validation, and atomic writes stay main-side — no
   filesystem access reaches the renderer. No other backend surface exists.

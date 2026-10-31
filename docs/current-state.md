@@ -345,6 +345,22 @@ thread.)
   clean, dev boot with no app console errors, real offline run through
   the mapper; per-project output isolation confirmed.
 
+## Hardening + artifact browsing (on `feature/video-import-processing`, uncommitted)
+
+- Worker stage planning (`plan_stages` pure of flags + observation
+  presence): fresh + `--skip-vision` completes as `extraction-only`
+  (exit 0, honest counts, null artifacts); corrupt observations still
+  fail `state_rebuild`. `completed` excludes skipped; totals equal the
+  plan. Contract updated (additive: `skipped`, `mode`, skip reasons).
+- `interrupted` recovery: store backstop (`settleProjectRun`,
+  `reconcileInterruptedRuns`), startup reconcile, main exit tracking
+  with quit-awareness; renderer surfaces the notice and re-runs.
+- Artifact browser in the workspace (Tabs: frames with `project://`
+  thumbnails, observations, match state, events, commentary) over
+  `list-artifacts` / `read-artifact` plus the privileged `project://`
+  media scheme (validated scopes/names/types, bare 404s).
+- Verified: 256/256 Python, 41/41 Electron (see task report).
+
 ## Recommended next milestone
 
 Dashboard artifact browsing in the Electron renderer (read-only views

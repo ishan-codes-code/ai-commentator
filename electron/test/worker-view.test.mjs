@@ -8,7 +8,7 @@ import {
   createInitialRunState,
   stageLabel,
 } from '../src/lib/worker-view.js';
-import { extensionOf, fileNameOf, fileUrlOf, formatBytes, timeAgo } from '../src/lib/format.js';
+import { extensionOf, fileNameOf, fileUrlOf, formatBytes, projectMediaUrl, timeAgo } from '../src/lib/format.js';
 
 test('stageLabel maps known stages and passes unknown through', () => {
   assert.equal(stageLabel('frame_extraction'), 'Frame extraction');
@@ -230,6 +230,13 @@ test('timeAgo renders relative times without throwing', () => {
   assert.equal(timeAgo('2024-10-31T12:00:00.000Z', now), '2y ago');
   assert.equal(timeAgo('not-a-date', now), '—');
   assert.equal(timeAgo(null, now), '—');
+});
+
+test('projectMediaUrl builds scoped protocol URLs', () => {
+  assert.equal(
+    projectMediaUrl('abc-123', 'frames', 'frame_00003.jpg'),
+    'project://abc-123/frames/frame_00003.jpg',
+  );
 });
 
 test('fileUrlOf builds file URLs from trusted absolute paths', () => {

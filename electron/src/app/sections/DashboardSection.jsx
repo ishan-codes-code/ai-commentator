@@ -26,6 +26,7 @@ const STATUS_BADGE = {
   done: "secondary",
   error: "destructive",
   cancelled: "outline",
+  interrupted: "outline",
 };
 
 function bridgeError() {

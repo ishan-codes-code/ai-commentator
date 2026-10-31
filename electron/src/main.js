@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol } from 'electron';
+import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
@@ -8,8 +9,13 @@ import {
   deleteProject,
   getProjectOutputDir,
   getProject as getStoredProject,
+  listArtifacts,
   listProjects,
   openProject,
+  readArtifact,
+  reconcileInterruptedRuns,
+  resolveProjectMedia,
+  settleProjectRun as settleStoredRun,
   updateProject,
 } from './project-store.mjs';
 import {
@@ -23,6 +29,16 @@ if (started) {
   app.quit();
 }
 
+// Custom project media scheme: standard + secure so <img>, <video>,
+// and <audio> treat project:// URLs like https. Must register before
+// the app is ready.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'project',
+    privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
+]);
+
 // Repository root: <root>/electron/.vite/build in dev, <root>/electron/out
 // in packaged builds. Worker and venv paths resolve from here so the app
 // never depends on the process working directory.
@@ -35,6 +51,21 @@ function repoRoot() {
 
 const workerManager = createWorkerManager();
 let mainWindow = null;
+let activeProjectId = null;
+let appQuitting = false;
+
+// Main-process wrapper around the store backstop: never throws into
+// worker lifecycle callbacks, even for deleted projects.
+function settleProjectRun(projectId, status) {
+  if (typeof projectId !== 'string' || projectId === '') {
+    return;
+  }
+  try {
+    settleStoredRun(app.getPath('userData'), projectId, status);
+  } catch {
+    // Project deleted or unreadable: nothing to reconcile.
+  }
+}
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
@@ -63,10 +94,64 @@ function sendWorkerEvent(message) {
   }
 }
 
+
+// Project-scoped media served over a privileged custom scheme so the
+// renderer can render frame thumbnails and play audio without any
+// filesystem access. Every segment is validated main-side (project id
+// allow-list, fixed scopes, filename pattern, extension allow-list,
+// containment, existence); anything else is a bare 404 with no detail.
+// Tradeoff vs IPC data-URLs: this keeps full-resolution images and
+// audio out of IPC payloads and memory, at the cost of one narrow
+// protocol surface that only addresses files inside the user's own
+// project directories.
+function registerProjectMediaProtocol() {
+  protocol.handle('project', (request) => {
+    if (request.method !== 'GET') {
+      return new Response('Not found', { status: 404 });
+    }
+    try {
+      const url = new URL(request.url);
+      const segments = url.pathname.split('/').filter(Boolean);
+      // project://<id>/frames/<name> or project://<id>/audio/<scope>/<name>
+      const [kind, ...rest] = segments;
+      let scope = null;
+      let name = null;
+      if (kind === 'frames' && rest.length === 1) {
+        scope = 'frames';
+        [name] = rest;
+      } else if (kind === 'audio' && rest.length === 2) {
+        const [audioScope, audioName] = rest;
+        if (audioScope !== 'audio' && audioScope !== 'commentary') {
+          return new Response('Not found', { status: 404 });
+        }
+        scope = audioScope === 'audio' ? 'audio' : 'audio/commentary';
+        name = audioName;
+      } else {
+        return new Response('Not found', { status: 404 });
+      }
+      const filePath = resolveProjectMedia(
+        app.getPath('userData'),
+        url.hostname,
+        scope,
+        name,
+      );
+      return net.fetch(pathToFileURL(filePath).toString());
+    } catch {
+      return new Response('Not found', { status: 404 });
+    }
+  });
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  try {
+    reconcileInterruptedRuns(app.getPath('userData'));
+  } catch {
+    // userData unreadable: start anyway with no recovery.
+  }
+  registerProjectMediaProtocol();
   createWindow();
 
   // On OS X it's common to re-create a window in the app when the
@@ -92,6 +177,7 @@ app.on('before-quit', () => {
   if (workerManager.isBusy()) {
     // Best effort: the process tree is torn down with the session, but an
     // explicit terminate avoids a stray paid API call or file write.
+    appQuitting = true;
     void workerManager.cancel({ killGraceMs: 1000 });
   }
 });
@@ -182,13 +268,25 @@ ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
     onMessage: (message) => sendWorkerEvent(message),
     onStderr: (text) => sendWorkerEvent({ type: 'worker-log', text }),
     onExit: ({ code, signal, cancelled, spawnError }) => {
+      const finishedProjectId = activeProjectId;
+      activeProjectId = null;
       if (spawnError) {
         sendWorkerEvent({
           type: 'error',
           stage: 'spawn',
           message: `Could not launch the Python worker: ${spawnError.message}`,
         });
+        settleProjectRun(finishedProjectId, 'error');
         return;
+      }
+      if (appQuitting) {
+        settleProjectRun(finishedProjectId, 'interrupted');
+      } else if (cancelled) {
+        settleProjectRun(finishedProjectId, 'cancelled');
+      } else if (code === 0) {
+        settleProjectRun(finishedProjectId, 'done');
+      } else {
+        settleProjectRun(finishedProjectId, 'error');
       }
       sendWorkerEvent({
         type: 'worker-exit',
@@ -201,6 +299,7 @@ ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
   if (!startedJob.started) {
     return { ok: false, error: 'A video is already being processed.' };
   }
+  activeProjectId = typeof opts.projectId === 'string' ? opts.projectId : null;
   return { ok: true, pid: startedJob.pid };
 });
 
@@ -245,6 +344,28 @@ ipcMain.handle('delete-project', async (_event, id) => {
       return { ok: false, error: 'Stop the active processing job first.' };
     }
     return { ok: true, ...deleteProject(app.getPath('userData'), id) };
+  } catch (err) {
+    return projectError(err);
+  }
+});
+
+ipcMain.handle('list-artifacts', async (_event, id) => {
+  try {
+    return {
+      ok: true,
+      artifacts: listArtifacts(app.getPath('userData'), id),
+    };
+  } catch (err) {
+    return projectError(err);
+  }
+});
+
+ipcMain.handle('read-artifact', async (_event, id, kind, name) => {
+  try {
+    return {
+      ok: true,
+      ...readArtifact(app.getPath('userData'), id, kind, name),
+    };
   } catch (err) {
     return projectError(err);
   }

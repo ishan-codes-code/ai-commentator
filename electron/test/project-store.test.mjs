@@ -11,8 +11,13 @@ import {
   getProject,
   getProjectOutputDir,
   getProjectsRoot,
+  listArtifacts,
   listProjects,
   openProject,
+  readArtifact,
+  reconcileInterruptedRuns,
+  resolveProjectMedia,
+  settleProjectRun,
   updateProject,
 } from '../src/project-store.mjs';
 
@@ -171,4 +176,185 @@ test('delete removes exactly one project tree', (t) => {
     listProjects(base).map((p) => p.id),
     [keep.id],
   );
+});
+
+test('interrupted status round-trips for startup recovery', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const created = createProject(base, { name: 'Crash', sourcePath: video });
+  // Simulate a run in flight when the session died.
+  updateProject(base, created.id, { processingStatus: 'processing' });
+  const stale = listProjects(base).find((p) => p.id === created.id);
+  assert.equal(stale.processingStatus, 'processing');
+  // Recovery marks it interrupted — never successful.
+  const recovered = updateProject(base, created.id, {
+    processingStatus: 'interrupted',
+  });
+  assert.equal(recovered.processingStatus, 'interrupted');
+  assert.equal(getProject(base, created.id).processingStatus, 'interrupted');
+  // A new run can start again from the recovered state.
+  const rerun = updateProject(base, created.id, {
+    processingStatus: 'processing',
+  });
+  assert.equal(rerun.processingStatus, 'processing');
+});
+
+test('settle only transitions out of processing, never to success', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const running = createProject(base, { name: 'Running', sourcePath: video });
+  const done = createProject(base, { name: 'Done', sourcePath: video });
+  updateProject(base, running.id, { processingStatus: 'processing' });
+  updateProject(base, done.id, { processingStatus: 'done' });
+
+  const settled = settleProjectRun(base, running.id, 'error');
+  assert.equal(settled.settled, true);
+  assert.equal(settled.project.processingStatus, 'error');
+
+  const untouched = settleProjectRun(base, done.id, 'error');
+  assert.equal(untouched.settled, false);
+  assert.equal(untouched.project.processingStatus, 'done');
+
+  assert.throws(() => settleProjectRun(base, running.id, 'processing'), /Invalid settle/);
+  assert.throws(() => settleProjectRun(base, running.id, 'idle'), /Invalid settle/);
+  assert.throws(() => settleProjectRun(base, running.id, 'bogus'), /Invalid settle/);
+  assert.throws(() => settleProjectRun(base, '../evil', 'error'), /Invalid project id/);
+});
+
+test('reconcile moves only stale processing projects to interrupted', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const stale = createProject(base, { name: 'Stale', sourcePath: video });
+  const fresh = createProject(base, { name: 'Fresh', sourcePath: video });
+  updateProject(base, stale.id, { processingStatus: 'processing' });
+
+  assert.deepEqual(reconcileInterruptedRuns(base), [stale.id]);
+  assert.equal(getProject(base, stale.id).processingStatus, 'interrupted');
+  assert.equal(getProject(base, fresh.id).processingStatus, 'idle');
+  // Second pass is a no-op: nothing processing remains.
+  assert.deepEqual(reconcileInterruptedRuns(base), []);
+  // Empty userData root reconciles cleanly.
+  const { base: empty, cleanup: cleanupEmpty } = makeUserData();
+  t.after(cleanupEmpty);
+  assert.deepEqual(reconcileInterruptedRuns(empty), []);
+});
+
+test('artifact listing is honest about absent outputs', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const created = createProject(base, { name: 'Empty', sourcePath: video });
+
+  const listing = listArtifacts(base, created.id);
+  assert.equal(listing.projectId, created.id);
+  assert.deepEqual(listing.frames, { count: 0, items: [] });
+  assert.deepEqual(listing.observations, { count: 0, items: [] });
+  assert.deepEqual(listing.state, { present: false, invalid: false });
+  assert.deepEqual(listing.events, { present: false, invalid: false, count: 0 });
+  assert.deepEqual(listing.commentary, { present: false, invalid: false, lines: 0 });
+  assert.deepEqual(listing.audio, { files: [] });
+  assert.throws(() => listArtifacts(base, 'no-such'), /Project not found/);
+  assert.throws(() => listArtifacts(base, '../evil'), /Invalid project id/);
+});
+
+test('artifact listing validates entries and reads documents', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const created = createProject(base, { name: 'Seeded', sourcePath: video });
+  const out = getProjectOutputDir(base, created.id);
+
+  fs.mkdirSync(path.join(out, 'frames'), { recursive: true });
+  fs.writeFileSync(path.join(out, 'frames', 'frame_00003.jpg'), Buffer.alloc(16));
+  fs.writeFileSync(path.join(out, 'frames', 'frame_00000.jpg'), Buffer.alloc(16));
+  fs.writeFileSync(path.join(out, 'frames', 'notes.txt'), 'ignore me');
+  const obsDir = path.join(out, 'observations');
+  fs.mkdirSync(obsDir, { recursive: true });
+  const obs = {
+    schema_version: 'observation-v1',
+    timestamp: 3,
+    observations: [
+      { category: 'environment', description: 'Dusty pitch.', confidence: 'high', evidence: 'seed' },
+    ],
+    uncertainties: [],
+  };
+  fs.writeFileSync(path.join(obsDir, 'frame_00003.json'), JSON.stringify(obs));
+  fs.writeFileSync(path.join(obsDir, 'frame_00006.json'), '{broken');
+  const eventsDir = path.join(out, 'events');
+  fs.mkdirSync(eventsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(eventsDir, 'events.json'),
+    JSON.stringify({ schema_version: 'events-v1', events: [{ type: 'x', timestamp: 3 }] }),
+  );
+  const audioDir = path.join(getProjectsRoot(base), created.id, 'audio');
+  fs.writeFileSync(path.join(audioDir, 'take.mp3'), Buffer.alloc(8));
+  fs.writeFileSync(path.join(audioDir, 'readme.txt'), 'not audio');
+
+  const listing = listArtifacts(base, created.id);
+  assert.equal(listing.frames.count, 2);
+  assert.deepEqual(
+    listing.frames.items.map((item) => item.name),
+    ['frame_00000.jpg', 'frame_00003.jpg'],
+  );
+  assert.equal(listing.frames.items[1].timestamp, 3);
+  assert.equal(listing.observations.count, 2);
+  assert.deepEqual(listing.state, { present: false, invalid: false });
+  assert.equal(listing.events.count, 1);
+  assert.deepEqual(listing.audio.files.map((f) => f.name), ['take.mp3']);
+  assert.equal(listing.audio.files[0].scope, 'audio');
+
+  const doc = readArtifact(base, created.id, 'observation', 'frame_00003.json');
+  assert.equal(doc.kind, 'observation');
+  assert.equal(doc.data.timestamp, 3);
+  assert.equal(doc.data.observations[0].category, 'environment');
+  assert.throws(
+    () => readArtifact(base, created.id, 'observation', 'frame_00006.json'),
+    /not valid JSON/,
+  );
+  assert.throws(
+    () => readArtifact(base, created.id, 'observation', '../../evil.json'),
+    /Invalid artifact name/,
+  );
+  assert.throws(
+    () => readArtifact(base, created.id, 'observation', 'match_state.json'),
+    /Invalid artifact name/,
+  );
+  assert.throws(
+    () => readArtifact(base, created.id, 'frames', 'frame_00003.jpg'),
+    /Unsupported artifact kind/,
+  );
+  assert.throws(
+    () => readArtifact(base, created.id, 'state', 'wrong.json'),
+    /Invalid artifact name/,
+  );
+  assert.throws(
+    () => readArtifact(base, created.id, 'commentary', 'commentary.json'),
+    /not found/i,
+  );
+  const eventsDoc = readArtifact(base, created.id, 'events', 'events.json');
+  assert.equal(eventsDoc.data.events.length, 1);
+});
+
+test('media resolver confines access to listed project files', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const created = createProject(base, { name: 'Media', sourcePath: video });
+  const out = getProjectOutputDir(base, created.id);
+  fs.mkdirSync(path.join(out, 'frames'), { recursive: true });
+  fs.writeFileSync(path.join(out, 'frames', 'frame_00003.jpg'), Buffer.alloc(16));
+  fs.writeFileSync(path.join(out, 'frames', 'notes.txt'), 'nope');
+
+  const resolved = resolveProjectMedia(base, created.id, 'frames', 'frame_00003.jpg');
+  assert.equal(resolved, path.join(out, 'frames', 'frame_00003.jpg'));
+  assert.throws(() => resolveProjectMedia(base, created.id, 'frames', 'notes.txt'), /Unsupported media type/);
+  assert.throws(() => resolveProjectMedia(base, created.id, 'output', 'frames'), /Unsupported media scope/);
+  assert.throws(() => resolveProjectMedia(base, created.id, 'frames', '../evil.jpg'), /Invalid media name/);
+  assert.throws(() => resolveProjectMedia(base, created.id, 'frames', '.hidden.jpg'), /Invalid media name|Unsupported media type/);
+  assert.throws(() => resolveProjectMedia(base, created.id, 'frames', 'missing.jpg'), /Media not found/);
+  assert.throws(() => resolveProjectMedia(base, '../evil', 'frames', 'frame_00003.jpg'), /Invalid project id/);
+  assert.throws(() => resolveProjectMedia(base, 'no-such', 'frames', 'frame_00003.jpg'), /Project not found/);
 });

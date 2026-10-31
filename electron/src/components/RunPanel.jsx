@@ -136,6 +136,13 @@ export default function RunPanel({
       {run.status === 'completed' && run.result ? (
         <>
           <Separator />
+          {run.result.mode === 'extraction-only' ? (
+            <p className="text-[13px] text-muted-foreground">
+              Frame extraction succeeded. No AI analysis was performed —
+              vision was skipped and this project has no observations to
+              rebuild from.
+            </p>
+          ) : null}
           <ResultRows result={run.result} />
         </>
       ) : null}

@@ -67,6 +67,11 @@ otherwise.
   original-game-audio and AI-commentary lanes (honest not-implemented
   states), project-bound Process, reused `RunPanel`, per-project
   status persistence.
+- [x] Hardening + artifacts: worker stage planning (`plan_stages`,
+  extraction-only runs, honest counts), `interrupted` recovery
+  (startup reconcile, exit backstop), artifact browser (frames,
+  observations, state, events, commentary over `list-artifacts` /
+  `read-artifact` + `project://` media).
 - Acceptance: create/reopen/delete projects; per-project output
   isolation; offline run from workspace completes; cancel works.
 - Excludes: artifact browsing, project rename, TTS, live capture.
