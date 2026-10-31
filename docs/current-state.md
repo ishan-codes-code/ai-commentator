@@ -1,5 +1,42 @@
 # Current state
 
+## Modularization status
+
+Project storage is implemented under `electron/src/project-store/`: `metadata.mjs`
+owns project lifecycle and metadata persistence, `artifacts.mjs` owns bounded
+artifact discovery and JSON reads, and `media.mjs` owns the validated
+project-media path resolver. `electron/src/project-store.mjs` and
+`project-store/index.mjs` preserve the existing import surface.
+
+The Python engine is organized under `python/ai_commentator/`: `config.py`,
+`errors.py`, and `storage.py` provide shared foundations; `vision/` owns frame
+handling, image/provider requests, observation validation, migration, and
+batch execution; `state/match_state.py` owns state validation and
+reconstruction, with `state/runner.py` rebuilding snapshots;
+`events/detection.py` owns event rules and `events/runner.py` executes them;
+`commentary/` owns claim validation/gating, writer wording, and generation;
+`script/generation.py` owns script validation and `script/runner.py` executes
+generation; and `cli.py` dispatches existing CLI
+modes. `python/main.py` is the compatibility facade for tests and existing
+imports. `python/worker.py` continues to import it as `main` and retains the
+same NDJSON orchestration.
+
+Electron `src/main.js` is now the composition point for app lifecycle and
+dependency wiring. Window creation, the project media protocol, processing
+IPC, and project/artifact IPC live in `src/main/window.js`,
+`src/main/media-protocol.js`, and `src/main/ipc/`. The renderer remains divided
+into app sections, layout, hooks, components, primitives, and libraries;
+`WorkspaceSection` and `ArtifactBrowser` remain the largest feature components.
+No documented data contract or pipeline behavior was intentionally changed.
+
+Modularization verification: `.venv/Scripts/python.exe -m unittest discover
+-s tests -v` passed 261 tests; `npm test` in `electron/` passed 52 tests;
+Python CLI help, Electron main-module syntax checks, and an offline worker run
+(12 valid NDJSON messages, exit 0) passed. `npm run package` built the main,
+preload, and renderer Vite bundles, but Forge packaging could not finish
+because its download request was blocked by the environment (`connect EACCES`).
+No paid API calls were made.
+
 Factual snapshot of the project as inspected in the repository.
 Nothing here is a claim about future work; for the plan, see
 [architecture.md](architecture.md) and [roadmap.md](roadmap.md).
@@ -16,10 +53,10 @@ during the migration.
 
 ## Existing files and responsibilities
 
-- `python/main.py` — the whole engine (moved from root `main.py`; the
-  algorithms are unchanged). Seven modes (still one module; the tracker,
-  migration, detector, and script stage were kept in `main.py`
-  as the smallest complete changes rather than a speculative split):
+- `python/main.py` — compatibility facade for the engine's public functions
+  and the existing CLI. Domain implementations live under
+  `python/ai_commentator/`; `python/worker.py` continues to import the facade.
+  The seven CLI modes preserve the existing behavior:
   - Default (`python python/main.py [--video PATH] [--output-dir DIR]`):
     extracts frames from the selected video (default
     `gameplay/match.mp4`) every 3 seconds (`INTERVAL = 3`) into
@@ -146,8 +183,11 @@ during the migration.
   prints are redirected to stderr; secrets never printed; exit 0 on
   success, 1 on stage failure, 2 on validation errors. Testable without
   Electron and without paid calls (`--skip-vision`, no key needed).
-- `electron/` — the desktop shell: `src/main.js` (window, IPC, spawn
-  lifecycle, single-job guard, cancel, before-quit cleanup),
+- `electron/` — the desktop shell: `src/main.js` (app composition and lifecycle),
+  `src/main/window.js` (window setup),
+  `src/main/ipc/processing.js` (worker lifecycle and selection IPC),
+  `src/main/ipc/projects.js` (project/artifact IPC),
+  `src/main/media-protocol.js` (project media scheme),
   `src/preload.js` (audited `contextBridge`: `processVideo`,
   `cancelProcessing`, `onWorkerEvent`), `src/worker-protocol.mjs`
   (incremental NDJSON parser, input validation, `.venv`/worker
@@ -210,7 +250,10 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
   incrementally, forwards progress/results to the renderer, refuses a
   second concurrent job, supports cancel, and terminates the child on
   app exit. Verified by `node:test` suites and by driving the real worker
-  from Node (offline, no paid calls); `npm run package` builds cleanly.
+  from Node (offline, no paid calls); the earlier native migration's
+  package run built cleanly. The latest modularization package attempt
+  built all Vite targets but was blocked during Forge's network download;
+  see the modularization verification note above.
 - Production interpreter packaging is explicitly out of scope: the
   integration target is local development with a native `.venv`.
 

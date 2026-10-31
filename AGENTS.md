@@ -15,23 +15,56 @@ Read this file and the relevant `docs/` pages before implementing any task.
 
 ## Architecture discipline
 
-- Electron owns the desktop shell and the user-facing app: window setup,
-  IPC routing, and child-process lifecycle (`electron/src/main.js`,
-  `electron/src/preload.js`, `electron/src/renderer.jsx`).
+- Electron owns the desktop shell and the user-facing app: composition and
+  app lifecycle (`electron/src/main.js`), focused window/protocol/IPC modules
+  (`electron/src/main/`), the narrow bridge (`electron/src/preload.js`), and
+  the renderer (`electron/src/renderer.jsx`).
 - Python owns the AI engine: frame extraction, vision analysis, state
   tracking, event detection, and commentary/script generation
-  (`python/main.py`, orchestrated via `python/worker.py`).
-- Do not prematurely split `python/main.py`. It is one tested module with
-  one CLI per pipeline stage; extract a module only when a second
-  consumer needs the same logic.
-- Keep provider-specific API logic behind the vision adapter boundary in
-  `python/main.py` (base URL, model ID, request shape, error mapping).
+  (`python/ai_commentator/`, orchestrated via `python/worker.py`).
+- Keep engine responsibilities in cohesive modules under
+  `python/ai_commentator/` (configuration/errors/storage, vision, state,
+  events, commentary, script, and CLI). Keep `python/main.py` as the
+  compatibility facade for existing imports and CLI users, and keep
+  `python/worker.py` as the NDJSON orchestrator. Do not recreate a
+  monolithic engine module or duplicate pipeline logic in the worker.
+- Keep provider-specific API logic behind the vision client boundary
+  (`python/ai_commentator/vision/client.py`): base URL, model ID, request
+  shape, and error mapping.
+- Module ownership: shared paths/schema identifiers/errors/persistence live
+  in `config.py`, `errors.py`, and `storage.py`; frame/image/provider and
+  observation logic lives in `vision/`; state reconstruction lives in
+  `state/match_state.py`; event rules live in `events/detection.py`;
+  evidence gating and wording live in `commentary/`; final script behavior
+  lives in `script/`; CLI parsing and dispatch live in `cli.py`.
+- Electron ownership: `main.js` composes the app; `main/window.js` owns
+  window creation; `main/media-protocol.js` owns project media serving;
+  `main/ipc/processing.js` owns processing, cancellation, status, and video
+  selection handlers; `main/ipc/projects.js` owns project and artifact
+  handlers. `project-store/metadata.mjs`, `artifacts.mjs`, and `media.mjs`
+  own their respective storage concerns.
 - Keep schemas and data contracts explicit (see `docs/contracts/`).
   Never change an existing contract silently: the worker protocol, the
   observation/state/event/commentary/script schemas, and the atomic-write
   behavior are compatibility surfaces.
 - Distinguish planned architecture (`docs/architecture.md`) from implemented
   functionality (`docs/current-state.md`).
+
+## Module boundaries
+
+- Each module owns one coherent responsibility. Domain logic does not
+  depend on CLI presentation; pipeline stages communicate through the
+  existing documented contracts.
+- Shared utilities do not import higher-level features. Avoid circular
+  imports and broad re-export modules; use explicit imports and exports.
+- Keep entry points thin. Extract modules when the responsibility is
+  cohesive, not solely to reduce line count. Preserve existing public
+  imports through the `python/main.py` facade while compatibility is
+  required.
+- Keep Electron main-process responsibilities in focused lifecycle, media
+  protocol, and IPC modules as they are extracted. Project storage is split
+  by metadata, artifacts, and media responsibilities; the
+  `electron/src/project-store.mjs` compatibility entry remains available.
 
 ## Worker communication protocol
 
@@ -132,11 +165,10 @@ Read this file and the relevant `docs/` pages before implementing any task.
   custom markup; do not create one-off duplicates of existing surfaces.
 - Motion via `motion/react` only, with `MotionConfig
   reducedMotion="user"` at the root; restrained, cheap properties only.
-- This task is renderer-only apart from safe frontend config and
-  documentation: never modify the Python engine, `python/worker.py`,
-  the NDJSON protocol, `main.js`, `preload.js`,
-  `worker-protocol.mjs`, `python-worker.mjs`, security settings, or
-  the model identifier. The renderer uses only `window.api`
+- For renderer-only tasks, avoid changes to the Python engine,
+  `python/worker.py`, the NDJSON protocol, Electron IPC/security boundaries,
+  or the model identifier unless the task explicitly requires them. The
+  renderer uses only `window.api`
   (`processVideo`, `cancelProcessing`, `onWorkerEvent`, `selectVideo`,
   plus project IPC — `selectVideo` added in Stage 1, project handlers
   in Stage 1.5, and artifact handlers plus the `project://` media scheme

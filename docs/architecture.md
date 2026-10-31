@@ -14,9 +14,10 @@ The application is a native desktop app with two halves:
   `onWorkerEvent` over `contextBridge`), and a main process that owns
   the window, IPC routing, and the Python child-process lifecycle.
   `nodeIntegration` stays disabled; `contextIsolation` stays enabled.
-- **Python engine** (`python/`): the AI pipeline. `main.py` implements
-  every stage with one CLI per stage; `worker.py` orchestrates the stages
-  for Electron and reports NDJSON progress on stdout
+- **Python engine** (`python/`): the AI pipeline lives in the cohesive
+  `ai_commentator/` package; `main.py` preserves the existing CLI and public
+  imports, while `worker.py` orchestrates the stages for Electron and reports
+  NDJSON progress on stdout
   (see [contracts/worker-protocol.md](contracts/worker-protocol.md)).
 
 Communication is `child_process.spawn()` of
@@ -25,6 +26,48 @@ Communication is `child_process.spawn()` of
 engine, not a network server: no Docker, no FastAPI, no database.
 Packaging the interpreter for production builds is explicitly out of
 scope; the target is local development with a native `.venv`.
+
+## Current module boundaries
+
+These are implemented boundaries, distinct from the future capabilities
+described later in this document:
+
+- **Python shared foundations:** `ai_commentator/config.py` owns paths,
+  versions, limits, and constants; `errors.py` owns shared errors;
+  `storage.py` owns atomic JSON writes and verified copies.
+- **Vision:** `vision/frames.py` owns frame extraction, discovery, spread
+  selection, and frame-related argument parsing. `vision/client.py` owns
+  image validation/encoding and the provider request adapter.
+  `vision/observations.py` owns observation parsing and validation.
+  `vision/batch.py` owns migration, single-frame execution, and batch
+  orchestration.
+- **Pipeline domains:** `state/match_state.py` owns state validation,
+  application, and finalization; `state/runner.py` rebuilds snapshots.
+  `events/detection.py` owns event validation, rules, and provenance;
+  `events/runner.py` executes detection. `commentary/validation.py` validates
+  claim documents and provenance, `claims.py` gates evidence, `writer.py`
+  owns writer wording, and `generation.py` runs commentary. In `script/`,
+  `generation.py` owns prompt construction, parsing, and validation;
+  `runner.py` executes the stage.
+- **Entry points and compatibility:** `ai_commentator/cli.py` dispatches the
+  existing commands. `python/main.py` explicitly re-exports the established
+  engine API and keeps legacy patch points; `python/worker.py` imports that
+  facade and retains the worker protocol.
+- **Electron:** `src/main.js` composes app lifecycle and dependencies.
+  `src/main/window.js`, `src/main/media-protocol.js`, and
+  `src/main/ipc/{processing,projects}.js` own window creation, media serving,
+  and their respective IPC handlers. Project storage is split into metadata,
+  artifacts, and media modules, with `src/project-store.mjs` preserving the
+  former import path. `preload.js` remains the narrow renderer bridge.
+- **Renderer:** app sections, layout, hooks, components, primitives, and
+  libraries remain separate. `WorkspaceSection` and `ArtifactBrowser` are
+  still the largest feature components and retain their current presentation.
+
+Dependency direction proceeds from shared foundations to vision/state/events,
+then commentary/script and CLI. Pipeline modules communicate through the
+existing documented contracts. Electron IPC modules depend on the worker and
+project-store boundaries; the renderer continues to use only `window.api`.
+`docs/current-state.md` records the observed implementation state.
 
 ## Data flow (intended)
 
