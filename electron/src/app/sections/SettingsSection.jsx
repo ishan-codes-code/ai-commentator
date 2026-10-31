@@ -1,4 +1,3 @@
-import PageHeader from "@/layout/PageHeader.jsx";
 import GlassCard from "@/primitives/GlassCard.jsx";
 
 /**
@@ -8,15 +7,11 @@ import GlassCard from "@/primitives/GlassCard.jsx";
 export default function SettingsSection() {
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader
-        title="Settings"
-        description="Application preferences."
-      />
-      <GlassCard className="p-6">
-        <h2 className="text-sm font-semibold text-foreground">
-          Nothing here yet
+      <GlassCard className="flex flex-col gap-1.5 p-5">
+        <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground">
+          No settings yet
         </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="text-[13px] text-muted-foreground">
           Renderer preferences will live here. Engine, worker, and
           provider settings are intentionally not exposed to the UI.
         </p>

@@ -21,7 +21,7 @@ function StageRow({ stage, info, active }) {
     <li className="flex items-center justify-between gap-2 py-1.5">
       <span className="flex min-w-0 items-center gap-2 text-sm">
         {active ? <Spinner /> : null}
-        <span className="truncate text-foreground">{stageLabel(stage)}</span>
+        <span className="truncate text-[13px] text-foreground">{stageLabel(stage)}</span>
       </span>
       {status === 'done' ? (
         <Badge variant="secondary">Done</Badge>
@@ -46,8 +46,8 @@ function ResultRows({ result }) {
     <dl className="flex flex-col gap-1.5">
       {rows.map(([label, value]) => (
         <div key={label} className="flex items-baseline justify-between gap-4">
-          <dt className="text-sm text-muted-foreground">{label}</dt>
-          <dd className="font-mono text-sm text-foreground">{String(value)}</dd>
+          <dt className="text-[13px] text-muted-foreground">{label}</dt>
+          <dd className="font-mono text-[13px] text-foreground">{String(value)}</dd>
         </div>
       ))}
       {result.output_dir ? (
@@ -90,7 +90,7 @@ export default function RunPanel({
   ];
 
   return (
-    <GlassCard className="flex flex-col gap-4 p-6">
+    <GlassCard className="flex flex-col gap-4 p-5">
       <div
         aria-live="polite"
         className="flex flex-wrap items-center justify-between gap-2"
@@ -126,7 +126,7 @@ export default function RunPanel({
       ) : null}
 
       {run.status === 'processing' && orderedStages.length === 0 ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
           <Spinner />
           {cancelling ? 'Cancelling…' : 'Starting worker…'}
         </div>
@@ -152,7 +152,7 @@ export default function RunPanel({
       ) : null}
 
       {run.status === 'cancelled' ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-[13px] text-muted-foreground">
           Processing was cancelled. No partial results are shown; start
           again when ready.
         </p>

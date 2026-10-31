@@ -42,13 +42,14 @@ electron/src/
       CommentarySection.jsx
       SettingsSection.jsx
   layout/
-    AppLayout.jsx         # sidebar + main panel frame
+    AppLayout.jsx         # sidebar + header + content column (flat)
     Sidebar.jsx           # nav (Dashboard/Matches/Commentary/Settings)
-    PageHeader.jsx        # title + description + actions row
+    AppHeader.jsx         # slim bar: section title + engine status
   primitives/
-    GlassPanel.jsx        # main glass surface
-    GlassCard.jsx         # content card on canvas/surface
-    StatusIndicator.jsx   # status dot + label (idle/processing/done/error)
+    GlassCard.jsx         # solid content card on canvas/surface
+    StatusIndicator.jsx   # status dot + label (5 run states)
+  hooks/
+    useWorkerStatus.js    # shared worker subscription (header + card)
   components/
     WorkerStatus.jsx      # worker bridge subscriber (existing behavior)
     VideoImport.jsx       # selection, preview, run lifecycle
@@ -73,7 +74,7 @@ primitives. No section reaches past the layout layer into another section.
 3. **Sections** (`app/sections/`): one placeholder-capable section per nav
    item. Sections compose primitives + shadcn components. Only sections
    that need live data subscribe to worker state (via `WorkerStatus`-style
-   subscription or a shared hook extracted from it later).
+   subscription via the shared `hooks/useWorkerStatus` hook).
 4. **Primitives** (`primitives/` + `ui/`): stateless visuals. Props in,
    markup out. No IPC, no timers, no fetches.
 
@@ -101,9 +102,9 @@ primitives. No section reaches past the layout layer into another section.
   No other backend surface exists.
 - Never invent worker data: unimplemented sections render honest empty
   states, never fake pipelines or mocked processing.
-- Event handling follows the existing `WorkerStatus` pattern (subscribe in
+- Event handling uses the shared `useWorkerStatus` hook (subscribe in
   `useEffect`, unsubscribe on cleanup); extract a shared hook only when a
-  second consumer needs it.
+  second consumer (`AppHeader` pill + `WorkerStatus` card).
 
 ## What changes next (not now)
 

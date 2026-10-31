@@ -202,20 +202,20 @@ export default function VideoImport() {
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={phase}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
           transition={{ duration: MOTION.standard, ease: EASING.entrance }}
         >
           {phase === 'empty' ? (
-            <GlassCard className="flex flex-col items-center gap-3 p-8 text-center">
-              <span className="flex size-11 items-center justify-center rounded-full bg-accent text-muted-foreground">
+            <GlassCard className="flex flex-col items-center gap-3 p-6 text-center">
+              <span className="flex size-10 items-center justify-center rounded-lg bg-accent text-muted-foreground">
                 <Clapperboard className="size-5" aria-hidden />
               </span>
-              <h2 className="text-base font-semibold text-foreground">
+              <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-foreground">
                 Import gameplay video
               </h2>
-              <p className="max-w-sm text-sm text-muted-foreground">
+              <p className="max-w-sm text-[13px] text-muted-foreground">
                 Choose a recorded match to extract frames and generate
                 commentary. Supported formats: {SUPPORTED_NOTE}.
               </p>
@@ -248,13 +248,14 @@ export default function VideoImport() {
           ) : null}
 
           {phase === 'ready' ? (
-            <GlassCard className="flex flex-col gap-4 p-6">
+            <GlassCard className="flex flex-col gap-4 p-5">
               {fileUrl && !previewFailed ? (
                 <video
                   key={selection.path}
                   src={fileUrl}
                   controls
                   preload="metadata"
+                  aria-label="Selected gameplay video preview"
                   onError={() => setPreviewFailed(true)}
                   className="aspect-video w-full rounded-card border border-border bg-background"
                 >

@@ -1,4 +1,4 @@
-# Obsidian AI — Design System
+# Obsidian Studio — Design System
 
 Product visual identity for the AI Commentator desktop application
 (Electron renderer). This document states the design philosophy and rules.
@@ -8,36 +8,40 @@ motion rules in [MOTION_GUIDELINES.md](MOTION_GUIDELINES.md).
 
 ## Identity
 
-**Obsidian AI**: a dark, cinematic, desktop-grade experience for an
-AI-powered esports commentator. The UI should feel like professional
-broadcast software: quiet surfaces, precise borders, one confident accent,
-and data presented without decoration.
+**Obsidian Studio**: a premium, cinematic, professional AI broadcasting
+workspace. The UI should feel like broadcast control software: quiet
+near-black surfaces, precise hairlines, confident typography, and data
+presented without decoration. Restraint is the brand — every decorative
+element must justify its pixels. This is not merely a darker theme; the
+system is built on typographic hierarchy, consistent spacing, deliberate
+proportions, and flat layered surfaces.
 
 ## Principles
 
-1. **Restraint first.** Dark, premium, technical. Every decorative element
-   must justify its pixels. When in doubt, remove.
-2. **Hierarchy through spacing and type**, not through color noise.
-   Generous whitespace, clear heading/body/label ranks, consistent 4px-base
-   rhythm.
-3. **Glass with purpose.** Glassmorphism marks layered, floating, or
-   elevated surfaces (panels, dialogs, popovers) — never flat page
-   background. One ambient glow per view at most, kept subtle.
-4. **One accent, one signal.** Electric Violet carries primary actions and
-   active states. Ice Blue carries secondary/technical signals (timers,
-   live indicators, links). Status colors speak only for status.
-5. **Desktop software, not a marketing site.** No hero sections, no
-   feature grids, no oversized rounded cards, no emoji iconography.
+1. **Solid before glass.** Layout surfaces are solid charcoal with
+   hairline separation. Glassmorphism is reserved for true overlays
+   (dialogs, popovers) — never for sidebars, panels, or cards.
+2. **Hierarchy through type and space.** One type scale, tight tracking
+   on headings, 13px UI body, 12px metadata, mono for technical values.
+   Generous but consistent spacing on a 4px base.
+3. **One accent, used sparingly.** Violet marks primary actions and the
+   single active state. Ice Blue is reserved for technical/live signals.
+   Status colors speak only for status.
+4. **Flat depth.** Separation comes from surface steps and 1px borders,
+   not shadows, glows, or stacked floating panels. One ambient treatment
+   at most, kept static and subtle.
+5. **Desktop software, not a website.** 12–15px type range, compact
+   controls, honest empty states, no heroes, no feature grids, no emoji.
 
 ## Color direction
 
-- Canvas: near-black `#09090B`; surfaces step up in small increments
-  (`#111114` → `#18181F` → `#22222B`).
-- Text: near-white foreground; two muted ranks for secondary and subtle
-  content. Muted text is for metadata, never for primary actions.
-- Borders are hairlines (`rgba(255,255,255,0.09)`); glass borders are
-  slightly brighter (`rgba(255,255,255,0.12)`).
-- Primary Electric Violet `#8B5CF6`, secondary Ice Blue `#38BDF8`.
+- Canvas: near-black `#030304`; surfaces step up deliberately
+  (`#08080A` → `#0C0C10` → `#121218`).
+- Borders are solid `#1C1C24` hairlines — no translucent glow borders
+  on layout surfaces.
+- Text: `#F5F5F7` primary; `#92929D` secondary body; `#686873`
+  metadata only (below body-contrast floor, never for content).
+- Primary Electric Violet `#9670FF`, secondary Ice Blue `#38BDF8`.
   Status: green `#22C55E`, amber `#F59E0B`, red `#EF4444`.
 - All component styling references **semantic tokens**
   (`bg-background`, `text-muted-foreground`, `border-border`, …),
@@ -45,53 +49,40 @@ and data presented without decoration.
 
 ## Typography
 
-- **Inter** for UI text (headings, body, labels, controls).
-- **Geist Mono** for timers, technical values, and statistics.
-- Semibold headings, regular body. One size scale with clear ranks;
-  body copy stays readable at desktop window sizes.
-- Fonts ship with the app via `@fontsource` packages (bundled, works
-  offline) — no runtime webfont fetching.
+- **Inter** for UI text; **Geist Mono** for timers, technical values,
+  paths, and statistics. Both bundled via `@fontsource` (offline-safe).
+- Scale: 15px semibold section titles (`-0.01em` tracking), 13px UI
+  body/labels, 12px metadata, 11px micro-labels (sidebar footer only).
+- Semibold headings, regular body. Tight leading on headings
+  (`leading-tight`), relaxed `1.5` body line-height for readability.
+- Never set marketing-hero sizes (20px+) for in-app headings; never use
+  uppercase tracked kickers as section decoration.
 
-## Glassmorphism rules
+## Surface and border rules
 
-- Glass = `rgba(24,24,31,0.78)` fill + ~16px backdrop blur + glass border.
-- Use glass only on genuinely layered surfaces: app panel, dialogs,
-  popovers, floating status elements.
-- Flat content surfaces use solid `surface`/`elevated` fills, not glass.
-- Never animate large blurred surfaces continuously (see
-  [MOTION_GUIDELINES.md](MOTION_GUIDELINES.md)); blur is expensive on
-  the GPU.
-- Text on glass must pass contrast: foreground or muted-foreground only,
-  never subtle-foreground on glass.
-
-## Elevation and depth
-
-1. Canvas (background) — flat.
-2. Surface — cards and sections.
-3. Glass panel — the main app panel, floating above canvas with a soft,
-   static ambient glow.
-4. Elevated — hover/raised controls, dialog bodies.
-5. Overlay — popovers, tooltips, toasts (highest, with scrim where modal).
-
-Shadows are soft and dark, never colored. Ambient glow is violet-tinted,
-low-opacity, static, and limited to one surface per view.
+- Sidebar, header bar, cards: solid fills, 1px `border-border`.
+- The header is a bar, not a panel: flat surface, bottom hairline only.
+- Elevation is conveyed by surface step + border, with at most a faint
+  1px shadow (`shadow-panel`); `shadow-overlay` is for modal layers.
+- `backdrop-blur-glass` exists for future dialogs/popovers — do not
+  apply blur to layout.
+- Text on elevated surfaces stays at secondary rank or above.
 
 ## Visual anti-patterns (do not ship these)
 
-- Excessive gradients, neon-everywhere, glowing text.
-- Identical glow on every card; glass on every surface.
-- `bg-clip-text` gradient headlines; purple-to-blue hero gradients.
-- Oversized rounding on everything (one radius per surface rank —
-  see tokens).
+- Glassmorphism on sidebars, panels, or cards; glow on every surface.
+- Stacked floating panels — one contained surface per view, flat inside.
+- Gradient headlines, `bg-clip-text`, purple-to-blue hero gradients.
+- Oversized rounding (see radius tokens); identical radius everywhere.
 - Bento grids, 3-card feature grids, hero + eyebrow + two-CTA layouts.
-- Emojis as icons (use Lucide), `space-x-*` stacks (use `gap`),
+- Emojis as icons (Lucide only), `space-x-*` stacks (use `gap`),
   `hover:scale-105` card lifts.
-- Perpetual animation of blurred/glowing layers; motion that ignores
+- Perpetual animation, animated gradients/blur, motion that ignores
   `prefers-reduced-motion`.
 
 ## Scope
 
-This milestone establishes the foundation (tokens, primitives, app shell,
-empty states). It is not a complete application: no video-selection flow,
-no dashboard data, no backend services. Explicit exclusions and the staged
-plan live in [UI_ROADMAP.md](UI_ROADMAP.md).
+This milestone covers the design system and application shell. It adds no
+product features: no project management (the dashboard reserves a marked
+planned area), no artifact browsing, no TTS, no live capture. Explicit
+staging lives in [UI_ROADMAP.md](UI_ROADMAP.md).

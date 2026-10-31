@@ -314,6 +314,19 @@ thread.)
   bridge), `COMPONENT_GUIDELINES.md` (`PageHeader` under `layout/`),
   `AGENTS.md` bridge lists, `UI_ROADMAP.md` Stage 1 acceptance.
 
+## Stage 1.5 step 1 — Obsidian Studio overhaul (uncommitted)
+
+- Near-black token system (`studio-950` `#030304` → `studio-800`
+  `#121218`, solid `#1C1C24` hairlines, `#9670FF` accent); glass
+  demoted to overlays only; 13px UI body, 15px section titles.
+- Flat shell: `AppLayout` (sidebar + `AppHeader` bar + content),
+  restyled `Sidebar`, shared `hooks/useWorkerStatus` (header pill +
+  `WorkerStatus` card); removed unused `GlassPanel`/`PageHeader`;
+  opacity-only section transitions.
+- Dashboard recomposed (import → worker → marked-planned Projects
+  area); control-state/a11y pass (labels, live regions, focus rings).
+- Verified: Electron suite, renderer build, dev boot (see task report).
+
 ## Recommended next milestone
 
 Dashboard artifact browsing in the Electron renderer (read-only views
