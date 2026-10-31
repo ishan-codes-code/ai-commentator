@@ -262,7 +262,8 @@ environment defines `BASETEN_API_KEY`. Secret values are never recorded here.
 ## Not implemented yet
 
 TTS/audio playback, live capture, OBS integration,
-Free Fire knowledge pack, video-selection UI and dashboard. (Multi-frame
+Free Fire knowledge pack, and dashboard artifact browsing.
+(Stage 1 video selection + run wiring is implemented, see below. Multi-frame
 runs, output separation, match-state tracking, conservative event
 detection, bounded batch concurrency, evidence-grounded commentary, the
 LLM writer path, the final LLM casting script, the Electron worker
@@ -293,9 +294,91 @@ thread.)
   console errors. Forbidden areas untouched (Python, worker protocol,
   main/preload, security settings, model ID).
 
+## Stage 1 — video import and processing (on `feature/video-import-processing`, uncommitted)
+
+- Approved exception to the renderer-only rule: `select-video` IPC
+  (`dialog.showOpenDialog` + `ipcMain.handle` in `main.js`, `selectVideo`
+  in `preload.js`). Read-only native dialog, main-side validation,
+  `sizeBytes` via `fs.statSync`; no filesystem access reaches the
+  renderer. `nodeIntegration`/`contextIsolation` unchanged.
+- `VideoImport` (selection, `file://` preview with honest fallback,
+  metadata) + `RunPanel` (stage-level progress, skipped-stage honesty,
+  cancel, result summary from real `result` fields, human-readable
+  errors) in the Dashboard; `WorkerStatus` preserved.
+- Pure `lib/worker-view.js` mapper (settled-gating so a new run starts
+  only after the previous worker exits) + `lib/format.js` helpers, both
+  covered by `electron/test/worker-view.test.mjs`.
+- Default run is offline-safe: `processVideo(path, { skipVision: true })`,
+  no API key needed, no paid calls. `withScript` never enabled by default.
+- Docs synced: `UI_ARCHITECTURE.md` (current structure, 4-function
+  bridge), `COMPONENT_GUIDELINES.md` (`PageHeader` under `layout/`),
+  `AGENTS.md` bridge lists, `UI_ROADMAP.md` Stage 1 acceptance.
+
+## Stage 1.5 step 1 — Obsidian Studio overhaul (uncommitted)
+
+- Near-black token system (`studio-950` `#030304` → `studio-800`
+  `#121218`, solid `#1C1C24` hairlines, `#9670FF` accent); glass
+  demoted to overlays only; 13px UI body, 15px section titles.
+- Flat shell: `AppLayout` (sidebar + `AppHeader` bar + content),
+  restyled `Sidebar`, shared `hooks/useWorkerStatus` (header pill +
+  `WorkerStatus` card); removed unused `GlassPanel`/`PageHeader`;
+  opacity-only section transitions.
+- Dashboard recomposed (import → worker → marked-planned Projects
+  area); control-state/a11y pass (labels, live regions, focus rings).
+- Verified: Electron suite, renderer build, dev boot (see task report).
+
+## Stage 1.5 — project-first dashboard + workspace (on `feature/video-import-processing`, uncommitted)
+
+- Approved project IPC in `main.js`/`preload.js` (`list-projects`,
+  `create-project`, `open-project`, `update-project`, `delete-project`)
+  plus `projectId`-bound `process-video` (main resolves source + output
+  from stored metadata). New `electron/src/project-store.mjs` (userData
+  storage, allow-listed ids, containment checks, atomic writes,
+  stage-then-rename creation) covered by
+  `electron/test/project-store.test.mjs` (6 tests).
+- Dashboard is project-first ("Your Projects" + Add Project flow with
+  naming step; rows with status; honest empty state; two-step delete).
+  New `WorkspaceSection` (preview + native playback, audio-lane
+  placeholders, project-bound processing via reused `RunPanel`,
+  per-project status persistence). `VideoImport` removed.
+- Verified: 34/34 Electron tests, 254/254 Python tests, renderer build
+  clean, dev boot with no app console errors, real offline run through
+  the mapper; per-project output isolation confirmed.
+
+## Hardening + artifact browsing (on `feature/video-import-processing`, uncommitted)
+
+- Worker stage planning (`plan_stages` pure of flags + observation
+  presence): fresh + `--skip-vision` completes as `extraction-only`
+  (exit 0, honest counts, null artifacts); corrupt observations still
+  fail `state_rebuild`. `completed` excludes skipped; totals equal the
+  plan. Contract updated (additive: `skipped`, `mode`, skip reasons).
+- `interrupted` recovery: store backstop (`settleProjectRun`,
+  `reconcileInterruptedRuns`), startup reconcile, main exit tracking
+  with quit-awareness; renderer surfaces the notice and re-runs.
+- Artifact browser in the workspace (Tabs: frames with `project://`
+  thumbnails, observations, match state, events, commentary) over
+  `list-artifacts` / `read-artifact` plus the privileged `project://`
+  media scheme (validated scopes/names/types, bare 404s).
+- Verified: 256/256 Python, 41/41 Electron (see task report).
+
+## Vision-enabled processing (Milestone 7, on
+`feature/video-import-processing`, uncommitted)
+
+- Workspace processing-mode selector: AI analysis (up to 10 frames,
+  default when a key is configured) vs offline extraction.
+- Explicit `--limit 10` via `buildWorkerArgv`; main-process key gate
+  before spawn plus `vision-status` IPC (boolean only); `limit`
+  validated before spawn, engine validates again.
+- RunPanel shows real stage detail counts and skip reasons; full runs
+  are labelled AI analysis, extraction-only runs keep their notice.
+  ArtifactBrowser already refetches on run-status change.
+- Verified: 261/261 Python (incl. 5 new vision-mode tests),
+  52/52 Electron (incl. 11 new), renderer build clean. Real
+  `--limit 10` run on `gameplay/match.mp4`: 66 frames, 10/10
+  observations, state rebuilt, 0 events (honest), 8 commentary lines.
+
 ## Recommended next milestone
 
-Video-selection UI and dashboard in the Electron renderer (drive the
-existing `processVideo`/`cancelProcessing`/`onWorkerEvent` API), then
-roadmap milestone 9 (TTS and audio playback).
+Roadmap milestone 9 (TTS and audio playback), then adaptive frame
+sampling (explicit follow-up; not started).
 See [roadmap.md](roadmap.md).

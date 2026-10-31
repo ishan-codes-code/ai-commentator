@@ -48,8 +48,8 @@ Keep values in `lib/tokens.js`; do not scatter literals.
 
 ## Patterns
 
-- **Section switch**: `AnimatePresence mode="wait"` + content fade/slide
-  ≤ 350ms. Keep `AnimatePresence` mounted; key children stably.
+- **Section switch**: `AnimatePresence mode="wait"` + opacity-only crossfade
+  ≤ 250ms. Keep `AnimatePresence` mounted; key children stably.
 - **Active nav indicator**: shared `layoutId` across nav items, spring or
   250ms ease — one instance per item (unique `layoutId` per repeated
   component).

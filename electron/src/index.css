@@ -3,42 +3,43 @@
 :root {
   color-scheme: dark;
 
-  /* Obsidian AI raw palette */
-  --obsidian-950: #09090b;
-  --obsidian-900: #111114;
-  --obsidian-850: #18181f;
-  --obsidian-800: #22222b;
+  /* Obsidian Studio raw palette (near-black, deliberate steps) */
+  --studio-950: #030304;
+  --studio-900: #08080a;
+  --studio-850: #0c0c10;
+  --studio-800: #121218;
 
   /* Semantic tokens (dark-only theme) */
-  --background: var(--obsidian-950);
-  --foreground: #fafafa;
-  --card: var(--obsidian-900);
-  --card-foreground: #fafafa;
-  --popover: var(--obsidian-850);
-  --popover-foreground: #fafafa;
-  --primary: #8b5cf6;
-  --primary-foreground: #fafafa;
+  --background: var(--studio-950);
+  --foreground: #f5f5f7;
+  --card: var(--studio-900);
+  --card-foreground: #f5f5f7;
+  --popover: var(--studio-850);
+  --popover-foreground: #f5f5f7;
+  --primary: #9670ff;
+  --primary-foreground: #f5f5f7;
   --secondary: #38bdf8;
-  --secondary-foreground: #09090b;
-  --muted: var(--obsidian-800);
-  --muted-foreground: #a1a1aa;
-  --accent: var(--obsidian-800);
-  --accent-foreground: #fafafa;
+  --secondary-foreground: #030304;
+  --muted: var(--studio-800);
+  --muted-foreground: #92929d;
+  --accent: var(--studio-800);
+  --accent-foreground: #f5f5f7;
   --destructive: #ef4444;
-  --destructive-foreground: #fafafa;
+  --destructive-foreground: #f5f5f7;
   --success: #22c55e;
   --warning: #f59e0b;
-  --border: rgba(255, 255, 255, 0.09);
-  --input: rgba(255, 255, 255, 0.09);
-  --ring: #8b5cf6;
+  --border: #1c1c24;
+  --input: #1c1c24;
+  --ring: #9670ff;
 
   /* Project surfaces */
-  --surface: var(--obsidian-900);
-  --elevated: var(--obsidian-800);
-  --glass: rgba(24, 24, 31, 0.78);
-  --glass-border: rgba(255, 255, 255, 0.12);
+  --surface: var(--studio-900);
+  --surface-raised: var(--studio-850);
+  --elevated: var(--studio-800);
+  --glass: rgba(12, 12, 16, 0.82);
+  --glass-border: #262630;
 
-  --radius: 0.5625rem;
+  --radius: 0.5rem;
 }
 
 @theme inline {
@@ -54,7 +55,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-subtle: #71717a;
+  --color-subtle: #686873;
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
@@ -65,6 +66,7 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
   --color-elevated: var(--elevated);
   --color-glass: var(--glass);
   --color-glass-border: var(--glass-border);
@@ -74,18 +76,18 @@
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
     monospace;
 
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 3px);
-  --radius-xl: calc(var(--radius) + 7px);
-  --radius-card: 0.75rem;
-  --radius-panel: 1rem;
-  --radius-dialog: 1.125rem;
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-card: 0.625rem;
+  --radius-panel: 0.75rem;
+  --radius-dialog: 0.875rem;
 
   --backdrop-blur-glass: 16px;
 
-  --shadow-panel: 0 24px 64px -24px rgba(0, 0, 0, 0.7);
-  --shadow-overlay: 0 16px 48px -12px rgba(0, 0, 0, 0.8);
+  --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-overlay: 0 12px 32px -8px rgba(0, 0, 0, 0.7);
 }
 
 html,
@@ -98,7 +100,14 @@ body {
   background-color: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
   margin: 0;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--primary) 30%, transparent);
 }

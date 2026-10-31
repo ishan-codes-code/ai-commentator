@@ -70,7 +70,10 @@ Read this file and the relevant `docs/` pages before implementing any task.
   appears on stdout or stderr.
 - Security boundaries: `nodeIntegration` stays disabled and
   `contextIsolation` stays enabled. `preload.js` exposes only
-  `processVideo`, `cancelProcessing`, and `onWorkerEvent` via
+  `processVideo`, `cancelProcessing`, `onWorkerEvent`, `selectVideo`,
+  `visionStatus` (key-configured boolean only, never the key value),
+  and the project IPC (`list-projects`, `create-project`, `open-project`,
+  `update-project`, `delete-project`, `list-artifacts`, `read-artifact`) via
   `contextBridge` — no unrestricted Node.js APIs, no API keys, and no
   interpreter paths reach the renderer. Validate every IPC input
   (non-empty string, supported video extension) in the main process.
@@ -134,7 +137,10 @@ Read this file and the relevant `docs/` pages before implementing any task.
   the NDJSON protocol, `main.js`, `preload.js`,
   `worker-protocol.mjs`, `python-worker.mjs`, security settings, or
   the model identifier. The renderer uses only `window.api`
-  (`processVideo`, `cancelProcessing`, `onWorkerEvent`).
+  (`processVideo`, `cancelProcessing`, `onWorkerEvent`, `selectVideo`,
+  plus project IPC — `selectVideo` added in Stage 1, project handlers
+  in Stage 1.5, and artifact handlers plus the `project://` media scheme
+  in the hardening milestone, each as an approved exception).
 
 ## Task completion
 

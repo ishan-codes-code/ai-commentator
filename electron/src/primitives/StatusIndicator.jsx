@@ -28,7 +28,7 @@ export default function StatusIndicator({ status = "idle", label, className }) {
             : { duration: MOTION.fast }
         }
       />
-      <span className="text-sm text-muted-foreground">{label ?? normalized}</span>
+      <span className="text-[13px] text-muted-foreground">{label ?? normalized}</span>
     </span>
   );
 }

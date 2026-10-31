@@ -115,6 +115,45 @@ def count_observations(obs_dir: Path) -> int:
     return len(engine.discover_observation_files(obs_dir))
 
 
+# Skip reasons reported in stage_completed detail. Stable strings:
+# the renderer and the contract document rely on them.
+SKIP_REASON_OPTION = "option-skipped"
+SKIP_REASON_NO_OBSERVATIONS = "no-observations"
+
+
+def plan_stages(args, obs_dir):
+    """Determine the stage plan from flags and available prerequisites.
+
+    Returns ``(stage, mode)`` pairs with mode ``"run"`` or ``"skip"``.
+    The plan is a pure function of configuration plus observation
+    presence, kept separate from execution so a future adaptive-sampling
+    milestone can refine stage selection without touching the runners
+    below. No stage is invented: skipped stages are reported, never
+    executed, and never counted as completed.
+    """
+    plan = [("frame_extraction", "run")]
+    plan.append(("vision_analysis", "run" if not args.skip_vision else "skip"))
+    downstream = ("state_rebuild", "event_detection", "commentary")
+    if args.skip_vision and count_observations(obs_dir) == 0:
+        # Extraction-only run: vision was skipped and there is nothing
+        # valid to analyse. Skipping (not failing) keeps fresh projects
+        # usable offline; no fake observations or states are created.
+        plan.extend((stage, "skip") for stage in downstream)
+    else:
+        plan.extend((stage, "run") for stage in downstream)
+    if args.with_script:
+        plan.append(("script", "run"))
+    return plan
+
+
+def run_mode(plan):
+    """Classify a run from its plan: full analysis or extraction-only."""
+    downstream = {"state_rebuild", "event_detection", "commentary"}
+    if any(stage in downstream and mode == "skip" for stage, mode in plan):
+        return "extraction-only"
+    return "full"
+
+
 def read_json_summary(path: Path) -> dict | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -142,14 +181,13 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
     commentary_path = base / "commentary" / engine.COMMENTARY_FILENAME
     script_path = base / "script" / engine.SCRIPT_FILENAME
 
-    stages = ["frame_extraction"]
-    if not args.skip_vision:
-        stages.append("vision_analysis")
-    stages += ["state_rebuild", "event_detection", "commentary"]
-    if args.with_script:
-        stages.append("script")
-    total = len(stages)
+    plan_list = plan_stages(args, obs_dir)
+    plan = dict(plan_list)
+    total = len(plan_list)
     done: list[str] = []
+    skipped: list[str] = []
+    events: list = []
+    lines: list = []
 
     def progress(stage: str) -> None:
         emit(
@@ -159,6 +197,18 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
                 "completed": len(done),
                 "total": total,
                 "progress": round(100 * len(done) / total),
+            }
+        )
+
+    def skip(stage: str, reason: str) -> None:
+        skipped.append(stage)
+        emit(
+            {
+                "type": "stage_completed",
+                "stage": stage,
+                "completed": len(done),
+                "total": total,
+                "detail": {"skipped": True, "reason": reason},
             }
         )
 
@@ -215,62 +265,71 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
         complete("vision_analysis", {"observations": observation_count})
     else:
         progress("vision_analysis")
-        complete("vision_analysis", {"skipped": True})
+        skip("vision_analysis", SKIP_REASON_OPTION)
 
     # Match-state rebuild (offline).
     progress("state_rebuild")
-    with contextlib.redirect_stdout(sys.stderr):
-        code = engine.run_state_rebuild(
-            observations_dir=obs_dir,
-            state_path=state_path,
-            frames_dir=frames_dir,
-        )
-    if code != 0:
-        emit_error(
-            "state_rebuild",
-            "State rebuild failed; see worker stderr.",
-        )
-        return 1, {}
-    complete("state_rebuild", {"state": str(state_path)})
+    if plan["state_rebuild"] == "skip":
+        skip("state_rebuild", SKIP_REASON_NO_OBSERVATIONS)
+    else:
+        with contextlib.redirect_stdout(sys.stderr):
+            code = engine.run_state_rebuild(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                frames_dir=frames_dir,
+            )
+        if code != 0:
+            emit_error(
+                "state_rebuild",
+                "State rebuild failed; see worker stderr.",
+            )
+            return 1, {}
+        complete("state_rebuild", {"state": str(state_path)})
 
     # Event detection (offline).
     progress("event_detection")
-    with contextlib.redirect_stdout(sys.stderr):
-        code = engine.run_detect_events(
-            observations_dir=obs_dir,
-            state_path=state_path,
-            events_path=events_path,
-            frames_dir=frames_dir,
-        )
-    if code != 0:
-        emit_error(
-            "event_detection",
-            "Event detection failed; see worker stderr.",
-        )
-        return 1, {}
-    events_doc = read_json_summary(events_path) or {}
-    events = events_doc.get("events", [])
-    complete("event_detection", {"events": len(events)})
+    if plan["event_detection"] == "skip":
+        skip("event_detection", SKIP_REASON_NO_OBSERVATIONS)
+    else:
+        with contextlib.redirect_stdout(sys.stderr):
+            code = engine.run_detect_events(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                events_path=events_path,
+                frames_dir=frames_dir,
+            )
+        if code != 0:
+            emit_error(
+                "event_detection",
+                "Event detection failed; see worker stderr.",
+            )
+            return 1, {}
+        events_doc = read_json_summary(events_path) or {}
+        events = events_doc.get("events", [])
+        complete("event_detection", {"events": len(events)})
 
     # Commentary generation, deterministic wording (offline).
     progress("commentary")
-    with contextlib.redirect_stdout(sys.stderr):
-        code = engine.run_generate_commentary(
-            observations_dir=obs_dir,
-            state_path=state_path,
-            events_path=events_path,
-            commentary_path=commentary_path,
-            frames_dir=frames_dir,
-        )
-    if code != 0:
-        emit_error(
-            "commentary",
-            "Commentary generation failed; see worker stderr.",
-        )
-        return 1, {}
-    commentary_doc = read_json_summary(commentary_path) or {}
-    lines = commentary_doc.get("lines", [])
-    complete("commentary", {"lines": len(lines)})
+    if plan["commentary"] == "skip":
+        skip("commentary", SKIP_REASON_NO_OBSERVATIONS)
+    else:
+        with contextlib.redirect_stdout(sys.stderr):
+            code = engine.run_generate_commentary(
+                observations_dir=obs_dir,
+                state_path=state_path,
+                events_path=events_path,
+                commentary_path=commentary_path,
+                frames_dir=frames_dir,
+            )
+        if code != 0:
+            emit_error(
+                "commentary",
+                "Commentary generation failed; see worker stderr.",
+            )
+            return 1, {}
+        commentary_doc = read_json_summary(commentary_path) or {}
+        lines = commentary_doc.get("lines", [])
+        complete("commentary", {"lines": len(lines)})
 
     # Final casting script (paid, opt-in).
     script_status = "skipped"
@@ -299,15 +358,19 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
         "video": str(video),
         "output_dir": str(base),
         "stages": done,
+        "skipped": skipped,
+        "mode": run_mode(plan_list),
         "frames": count_frames(frames_dir),
         "observations": count_observations(obs_dir),
         "events": len(events),
         "commentary_lines": len(lines),
         "script": script_status,
         "artifacts": {
-            "state": str(state_path),
-            "events": str(events_path),
-            "commentary": str(commentary_path),
+            "state": str(state_path) if state_path.is_file() else None,
+            "events": str(events_path) if events_path.is_file() else None,
+            "commentary": (
+                str(commentary_path) if commentary_path.is_file() else None
+            ),
             "script": str(script_path) if args.with_script else None,
         },
     }

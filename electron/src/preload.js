@@ -7,6 +7,17 @@ contextBridge.exposeInMainWorld('api', {
   processVideo: (videoPath, options) =>
     ipcRenderer.invoke('process-video', videoPath, options ?? {}),
   cancelProcessing: () => ipcRenderer.invoke('cancel-processing'),
+  visionStatus: () => ipcRenderer.invoke('vision-status'),
+  selectVideo: () => ipcRenderer.invoke('select-video'),
+  listProjects: () => ipcRenderer.invoke('list-projects'),
+  createProject: (name, sourcePath) =>
+    ipcRenderer.invoke('create-project', name, sourcePath),
+  openProject: (id) => ipcRenderer.invoke('open-project', id),
+  updateProject: (id, patch) => ipcRenderer.invoke('update-project', id, patch),
+  deleteProject: (id) => ipcRenderer.invoke('delete-project', id),
+  listArtifacts: (id) => ipcRenderer.invoke('list-artifacts', id),
+  readArtifact: (id, kind, name) =>
+    ipcRenderer.invoke('read-artifact', id, kind, name),
   onWorkerEvent: (callback) => {
     if (typeof callback !== 'function') {
       throw new TypeError('callback must be a function.');

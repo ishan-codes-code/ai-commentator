@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
@@ -225,6 +226,10 @@ class WorkerOfflineRunTests(unittest.TestCase):
             self.assertEqual(messages[0]["type"], "started")
             self.assertEqual(messages[-1]["type"], "result")
             data = messages[-1]["data"]
+            for message in messages:
+                if message["type"] in ("progress", "stage_completed"):
+                    self.assertEqual(message["total"], 5)
+                    self.assertLessEqual(message["completed"], 5)
             self.assertEqual(data["video"], str(video))
             self.assertEqual(data["output_dir"], str(out))
             self.assertEqual(data["frames"], 3)
@@ -234,19 +239,40 @@ class WorkerOfflineRunTests(unittest.TestCase):
                 data["stages"],
                 [
                     "frame_extraction",
-                    "vision_analysis",
                     "state_rebuild",
                     "event_detection",
                     "commentary",
                 ],
             )
+            self.assertEqual(data["skipped"], ["vision_analysis"])
+            self.assertEqual(data["mode"], "full")
             completed = [
                 message
                 for message in messages
                 if message["type"] == "stage_completed"
             ]
+            # Every planned stage reports exactly once; completed and
+            # skipped partition the stream with no overlap.
             self.assertEqual(
-                [message["stage"] for message in completed], data["stages"]
+                sorted(message["stage"] for message in completed),
+                sorted(data["stages"] + data["skipped"]),
+            )
+            self.assertEqual(
+                set(data["stages"]).intersection(data["skipped"]), set()
+            )
+            skipped_details = {
+                message["stage"]: message["detail"]
+                for message in completed
+                if message["detail"].get("skipped")
+            }
+            self.assertEqual(
+                skipped_details,
+                {
+                    "vision_analysis": {
+                        "skipped": True,
+                        "reason": "option-skipped",
+                    }
+                },
             )
             # Artifacts referenced in the result actually exist.
             for key in ("state", "events", "commentary"):
@@ -254,7 +280,7 @@ class WorkerOfflineRunTests(unittest.TestCase):
                     Path(data["artifacts"][key]).is_file(), msg=key
                 )
 
-    def test_empty_tree_fails_at_state_rebuild(self):
+    def test_empty_tree_completes_extraction_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             video = write_test_video(root / "clip.mp4")
@@ -264,6 +290,57 @@ class WorkerOfflineRunTests(unittest.TestCase):
                 str(root / "out"),
                 "--skip-vision",
             )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr[-2000:])
+        messages = parse_stdout_lines(proc)
+        self.assertEqual(messages[0]["type"], "started")
+        self.assertEqual(messages[-1]["type"], "result")
+        data = messages[-1]["data"]
+        self.assertEqual(data["mode"], "extraction-only")
+        self.assertEqual(data["stages"], ["frame_extraction"])
+        self.assertEqual(
+            data["skipped"],
+            [
+                "vision_analysis",
+                "state_rebuild",
+                "event_detection",
+                "commentary",
+            ],
+        )
+        self.assertEqual(data["frames"], 3)
+        self.assertEqual(data["observations"], 0)
+        # No fake artifacts: absent files are null, not paths.
+        self.assertIsNone(data["artifacts"]["state"])
+        self.assertIsNone(data["artifacts"]["events"])
+        self.assertIsNone(data["artifacts"]["commentary"])
+        # Monotonic counts that never exceed the plan total.
+        seen = 0
+        for message in messages:
+            if message["type"] in ("progress", "stage_completed"):
+                self.assertEqual(message["total"], 5)
+                self.assertLessEqual(message["completed"], 5)
+                self.assertGreaterEqual(message["completed"], seen)
+                seen = message["completed"]
+        # Exactly one terminal event, and it is the success.
+        terminals = [
+            message
+            for message in messages
+            if message["type"] in ("result", "error")
+        ]
+        self.assertEqual(len(terminals), 1)
+
+    def test_corrupt_observations_still_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            obs = out / "observations"
+            obs.mkdir(parents=True)
+            (obs / "frame_00000.json").write_text(
+                "{invalid json", encoding="utf-8"
+            )
+            proc = run_worker(
+                str(video), "--output-dir", str(out), "--skip-vision"
+            )
         self.assertEqual(proc.returncode, 1)
         messages = parse_stdout_lines(proc)
         errors = [
@@ -271,7 +348,212 @@ class WorkerOfflineRunTests(unittest.TestCase):
         ]
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0]["stage"], "state_rebuild")
+        self.assertFalse(
+            [message for message in messages if message["type"] == "result"]
+        )
 
+    def test_plan_stages_is_pure_and_modular(self):
+        import types
+
+        def flags(skip_vision, with_script=False):
+            return types.SimpleNamespace(
+                skip_vision=skip_vision, with_script=with_script
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "empty"
+            empty.mkdir()
+            seeded = Path(tmp) / "seeded"
+            seed_observations(seeded)
+            full = worker.plan_stages(flags(False), seeded)
+            self.assertEqual(
+                [stage for stage, _ in full],
+                [
+                    "frame_extraction",
+                    "vision_analysis",
+                    "state_rebuild",
+                    "event_detection",
+                    "commentary",
+                ],
+            )
+            self.assertTrue(all(mode == "run" for _, mode in full))
+            self.assertEqual(worker.run_mode(full), "full")
+            planned = dict(worker.plan_stages(flags(True), seeded))
+            self.assertEqual(planned["vision_analysis"], "skip")
+            self.assertEqual(planned["state_rebuild"], "run")
+            fresh = worker.plan_stages(flags(True), empty)
+            self.assertEqual(worker.run_mode(fresh), "extraction-only")
+            self.assertEqual(
+                [stage for stage, mode in fresh if mode == "skip"],
+                [
+                    "vision_analysis",
+                    "state_rebuild",
+                    "event_detection",
+                    "commentary",
+                ],
+            )
+            scripted = worker.plan_stages(flags(True, True), seeded)
+            self.assertEqual(scripted[-1], ("script", "run"))
+
+
+
+
+class VisionModeTests(unittest.TestCase):
+    """Vision-enabled runs: limit plumbing, honest failure, cache reuse.
+
+    Paid API calls are never made here: ``run_vision_batch`` is mocked
+    and subprocess runs use the key-stripped offline environment.
+    """
+
+    def run_pipeline_quiet(self, args):
+        import io
+        import json
+
+        buffer = io.StringIO()
+        real = worker.REAL_STDOUT
+        worker.REAL_STDOUT = buffer
+        try:
+            code, data = worker.run_pipeline(args)
+        finally:
+            worker.REAL_STDOUT = real
+        messages = [json.loads(line) for line in buffer.getvalue().splitlines()]
+        return code, data, messages
+
+    def vision_args(self, video, out, **overrides):
+        import types
+
+        kwargs = {
+            "video": video,
+            "output_dir": out,
+            "limit": 10,
+            "force": False,
+            "jobs": None,
+            "skip_vision": False,
+            "with_script": False,
+        }
+        kwargs.update(overrides)
+        return types.SimpleNamespace(**kwargs)
+
+    def test_limit_ten_reaches_vision_batch_and_completes_full(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+
+            def fake_batch(limit, force, jobs, directory, observations_dir):
+                seed_observations(Path(observations_dir))
+                return 0
+
+            with mock.patch.object(
+                worker.engine, "run_vision_batch", side_effect=fake_batch
+            ) as batch:
+                code, data, messages = self.run_pipeline_quiet(
+                    self.vision_args(str(video), str(out))
+                )
+        self.assertEqual(code, 0)
+        batch.assert_called_once()
+        _, kwargs = batch.call_args
+        self.assertEqual(kwargs["limit"], 10)
+        self.assertFalse(kwargs["force"])
+        self.assertEqual(kwargs["jobs"], worker.engine.DEFAULT_VISION_BATCH_JOBS)
+        self.assertEqual(data["mode"], "full")
+        self.assertEqual(
+            data["stages"],
+            [
+                "frame_extraction",
+                "vision_analysis",
+                "state_rebuild",
+                "event_detection",
+                "commentary",
+            ],
+        )
+        self.assertEqual(data["skipped"], [])
+        self.assertGreater(data["observations"], 0)
+        self.assertIsNotNone(data["artifacts"]["state"])
+        self.assertIsNotNone(data["artifacts"]["events"])
+        self.assertIsNotNone(data["artifacts"]["commentary"])
+        totals = {
+            message["total"]
+            for message in messages
+            if message["type"] in ("progress", "stage_completed")
+        }
+        self.assertEqual(totals, {5})
+        # run_pipeline returns (code, data); the terminal `result`
+        # message is emitted by main(). Code 0 plus the full stage
+        # list above is this path's success signal.
+
+    def test_vision_failure_fails_run_without_downstream_results(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            with mock.patch.object(
+                worker.engine, "run_vision_batch", return_value=1
+            ):
+                code, data, messages = self.run_pipeline_quiet(
+                    self.vision_args(str(video), str(out))
+                )
+        self.assertEqual(code, 1)
+        self.assertEqual(data, {})
+        errors = [m for m in messages if m["type"] == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["stage"], "vision_analysis")
+        self.assertFalse([m for m in messages if m["type"] == "result"])
+
+    def test_seeded_observations_reused_for_full_offline_run(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            seed_observations(out / "observations")
+            proc = run_worker(
+                str(video),
+                "--output-dir",
+                str(out),
+                "--skip-vision",
+            )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr[-2000:])
+        messages = parse_stdout_lines(proc)
+        data = messages[-1]["data"]
+        self.assertEqual(data["mode"], "full")
+        self.assertIn("state_rebuild", data["stages"])
+        self.assertIn("event_detection", data["stages"])
+        self.assertIn("commentary", data["stages"])
+        self.assertEqual(data["skipped"], ["vision_analysis"])
+
+    def test_vision_mode_without_key_fails_fast_before_extraction(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            proc = run_worker(
+                str(video),
+                "--output-dir",
+                str(out),
+                "--limit",
+                "10",
+                env=offline_env(),
+            )
+        self.assertEqual(proc.returncode, 1)
+        messages = parse_stdout_lines(proc)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["type"], "error")
+        self.assertEqual(messages[0]["stage"], "vision_analysis")
+        self.assertIn("BASETEN_API_KEY", messages[0]["message"])
+        self.assertFalse((root / "out").exists())
+
+    def test_limit_argument_parses_explicit_ten(self):
+        args = worker.build_parser().parse_args(["clip.mp4", "--limit", "10"])
+        self.assertEqual(args.limit, 10)
+        self.assertFalse(args.skip_vision)
 
 if __name__ == "__main__":
     unittest.main()

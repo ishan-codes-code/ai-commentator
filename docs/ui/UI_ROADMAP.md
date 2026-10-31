@@ -13,7 +13,8 @@ otherwise.
 - [x] shadcn manual setup for the Forge/Vite layout: `components.json`
   (`tsx: false`, Tailwind v4, `src/index.css`), `@/` alias (Vite +
   `jsconfig.json`), initial components
-  (button, card, badge, separator, skeleton).
+  (button, card, badge, separator, skeleton; alert + spinner added in
+  Stage 1).
 - [x] Obsidian tokens in `index.css`; six `docs/ui/` documents; AGENTS.md
   UI section.
 - [x] App shell: `AppLayout` + `Sidebar` + `PageHeader` + `GlassPanel` /
@@ -23,10 +24,21 @@ otherwise.
   nav, empty dashboard, live worker status, no console errors; tokens,
   alias, and reduced-motion verified.
 
-## Stage 1 — Video selection + processing wiring
+## Stage 1 — Video selection + processing wiring (implemented, on `feature/video-import-processing`, uncommitted)
 
 - Depends on: Stage 0.
-- File picker (later: path input) calling `window.api.processVideo`
+- [x] Approved exception: `select-video` IPC (read-only native
+  `dialog.showOpenDialog` + main-side validation/size; `selectVideo`
+  in `preload.js`). No filesystem access reaches the renderer.
+- [x] `VideoImport`: native picker, metadata (name/ext/size/path),
+  `file://` preview with honest fallback, offline-safe
+  `processVideo(path, { skipVision: true })` default, single-submit
+  guard, Replace/Remove.
+- [x] `RunPanel`: stage-level progress with skipped-stage honesty,
+  cancel via `cancelProcessing` (confirmed by worker lifecycle),
+  result summary from real `result` fields, human-readable errors.
+  Pure `lib/worker-view.js` mapper with settled-gating + unit tests.
+- Processing uses `window.api.processVideo`
   with main-process validation; cancel via `cancelProcessing`; progress
   and stage display through the existing worker-event subscription;
   result/error surfacing with artifacts from the `result` message.
@@ -34,6 +46,35 @@ otherwise.
   stage progress and completes; cancel stops the run; invalid paths show
   the main-process validation error.
 - Excludes: paid stages from the UI default path; output browsing.
+- Note: the Stage 1 import-first dashboard composition was superseded
+  by the project-first dashboard below. `VideoImport` was removed;
+  `RunPanel`, `worker-view`, and the offline default were reused.
+
+## Stage 1.5 — Project-first dashboard + workspace (implemented, on `feature/video-import-processing`, uncommitted)
+
+- Depends on: Stage 1.
+- [x] Approved exception: project IPC in `main.js`/`preload.js`
+  (`list-projects`, `create-project`, `open-project`,
+  `update-project`, `delete-project`) plus `projectId`-bound
+  `process-video` (main resolves source + output from metadata).
+- [x] `project-store.mjs`: userData storage, allow-listed ids,
+  containment checks, atomic writes, stage-then-rename creation,
+  validated loads; covered by `electron/test/project-store.test.mjs`.
+- [x] Dashboard: "Your Projects" + Add Project (native picker → name
+  → isolated copy → open workspace); rows with name, source, size,
+  last-opened, status; honest empty state; two-step delete.
+- [x] Workspace: project header, gameplay preview + native playback,
+  original-game-audio and AI-commentary lanes (honest not-implemented
+  states), project-bound Process, reused `RunPanel`, per-project
+  status persistence.
+- [x] Hardening + artifacts: worker stage planning (`plan_stages`,
+  extraction-only runs, honest counts), `interrupted` recovery
+  (startup reconcile, exit backstop), artifact browser (frames,
+  observations, state, events, commentary over `list-artifacts` /
+  `read-artifact` + `project://` media).
+- Acceptance: create/reopen/delete projects; per-project output
+  isolation; offline run from workspace completes; cancel works.
+- Excludes: artifact browsing, project rename, TTS, live capture.
 
 ## Stage 2 — Dashboard data
 
