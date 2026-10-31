@@ -12,12 +12,18 @@ see [../architecture.md](../architecture.md) and
   includes the project library, project workspace, analysis/commentary
   views, settings, and honest prompt/audio placeholders.
 - `electron/src/layout/` — `AppLayout`, `Sidebar`, and `AppHeader`;
-  `AppLayout` shows a compact audio tray only while a project workspace is open.
+  navigation collapse is controlled by `App`, while inspector visibility is
+  controlled at the workspace boundary and exposed in the header.
+- `electron/src/app/sections/workspace/` — `ProjectWorkspaceLayout` owns the
+  fixed editor grid and dock; `EditorCenter` owns preview/artifact tabs;
+  `ProcessingInspector` presents existing run state and project information;
+  `DockedWorkspace` hosts bottom-panel tabs (Audio only today).
 - `electron/src/primitives/` — `GlassPanel`, `GlassCard`, `StatusIndicator`.
 - `electron/src/app/sections/DashboardSection.jsx` — project creation,
   listing, opening, and deletion through the audited `window.api` bridge.
-- `electron/src/app/sections/WorkspaceSection.jsx` — project media preview,
-  project-bound processing, worker lifecycle, and artifact browsing.
+- `electron/src/app/sections/WorkspaceSection.jsx` — project loading,
+  project-bound processing and its single worker subscription; it composes
+  the workspace regions.
 - `electron/src/components/RunPanel.jsx` — presentational run states
   driven by `lib/worker-view.js`.
 - `electron/src/components/WorkerStatus.jsx` — dashboard worker status;
@@ -106,6 +112,9 @@ primitives. No section reaches past the layout layer into another section.
   Projects live under Electron `userData` (see `project-store.mjs`);
   All paths, validation, and atomic writes stay main-side — no
   filesystem access reaches the renderer. No other backend surface exists.
+- Project workspaces are fixed to the Electron viewport. Scroll stays within
+  the inspector, artifact view, or global library section. The dock uses a
+  fixed height because no panel-resizing dependency is installed.
 - Never invent worker data: unimplemented sections render honest empty
   states, never fake pipelines or mocked processing.
 - Event handling uses the shared `useWorkerStatus` hook (subscribe in

@@ -7,6 +7,7 @@ import { Spinner } from '@/components/ui/spinner.jsx';
 import GlassCard from '@/primitives/GlassCard.jsx';
 import StatusIndicator from '@/primitives/StatusIndicator.jsx';
 import { STAGE_LABELS, stageDetailText, stageLabel } from '@/lib/worker-view.js';
+import { cn } from 'cn';
 
 const STATUS_LABELS = {
   processing: 'Processing',
@@ -83,6 +84,8 @@ export default function RunPanel({
   onRetry,
   onChooseDifferent,
   chooseDifferentLabel = "Choose different video",
+  showActions = true,
+  className,
 }) {
   const indicatorStatus =
     run.status === 'completed'
@@ -99,7 +102,7 @@ export default function RunPanel({
   ];
 
   return (
-    <GlassCard className="flex flex-col gap-4 p-5">
+    <GlassCard className={cn("flex flex-col gap-4 p-5", className)}>
       <div
         aria-live="polite"
         className="flex flex-wrap items-center justify-between gap-2"
@@ -188,7 +191,7 @@ export default function RunPanel({
         </Alert>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
+      {showActions ? <div className="flex flex-wrap gap-2">
         {run.status === 'processing' ? (
           <Button
             type="button"
@@ -219,7 +222,7 @@ export default function RunPanel({
             </Button>
           </>
         ) : null}
-      </div>
+      </div> : null}
     </GlassCard>
   );
 }

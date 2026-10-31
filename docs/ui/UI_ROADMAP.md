@@ -19,9 +19,10 @@ otherwise.
   and radius scales, and synchronized design-token documentation.
 - [x] Windowed startup with normal operating-system controls and isolated
   preload configuration (current default: 900 × 650).
-- [x] Studio shell with Editor, AI Prompts, AI Analysis, Audio, and Settings
-  navigation; live worker status; flexible project preview; persistent
-  honest audio tray; project and processing flows preserved.
+- [x] Studio shell with Dashboard, Editor, AI Analysis, Commentary, AI
+  Prompts, Audio, and Settings navigation; live worker status; flexible
+  project preview; collapsible navigation; project inspector; central
+  preview/artifact views; and a docked, tabbed audio workspace.
 - Verification: see `docs/current-state.md` and the task handoff for the
   actual test and packaging results from this environment.
 

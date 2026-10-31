@@ -2,17 +2,18 @@
 
 ## Commentary Studio UI foundation
 
-The Electron renderer now opens into a 900 × 650 windowed studio shell with
-compact section navigation and a live worker-status header. The project
-workspace contains a compact three-lane audio tray. The Editor retains the
-project library, project-bound processing, project media preview, run status,
-and artifact browsing. Project source video preview uses the main-process `project://`
-protocol, including under the Vite development server. The protocol only
-serves the source filename recorded in project metadata. Prompt inspection
-and standalone audio playback remain explicit placeholders. The UI token
-palette is monochromatic; status accents remain semantic. The window retains
-normal operating-system controls. No Python engine or worker protocol behavior
-changed.
+The Electron renderer opens into a 900 × 650 windowed studio shell with a
+toggleable navigation sidebar and live worker-status header. An open project
+uses a bounded editor with independently toggleable processing/project
+inspector, central Preview and Artifacts tabs, and a docked tabbed bottom
+workspace. Audio is the only implemented bottom panel and shows honest empty
+playback lanes at a fixed height. Processing actions/status and source details
+remain project-scoped; artifact browsing stays project-scoped. Project source
+preview uses the main-process `project://` protocol under both development
+and packaged origins; it only serves the source filename recorded in project
+metadata. Prompt inspection and standalone audio playback remain placeholders.
+The UI palette is monochromatic with semantic status accents. Window size and
+lifecycle are unchanged. No Python engine or worker protocol behavior changed.
 
 ## Modularization status
 

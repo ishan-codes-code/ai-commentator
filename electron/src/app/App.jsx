@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import AppLayout from "@/layout/AppLayout.jsx";
 import AppHeader from "@/layout/AppHeader.jsx";
@@ -21,7 +21,7 @@ const SECTION_VIEWS = {
 };
 
 const SECTION_META = {
-  dashboard: { title: "Your Projects", context: "Local project library" },
+  dashboard: { title: "Dashboard", context: "Project library" },
   matches: { title: "AI Analysis", context: "Validated observations and events" },
   commentary: { title: "Commentary", context: "Generated lines and scripts" },
   settings: { title: "Settings", context: "Application preferences" },
@@ -32,23 +32,60 @@ const SECTION_META = {
 export default function App() {
   const [activeSection, setActiveSection] = useState("dashboard");
   const [workspaceId, setWorkspaceId] = useState(null);
+  const [projectName, setProjectName] = useState(null);
+  const [navigationCollapsed, setNavigationCollapsed] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
 
   const inWorkspace = workspaceId !== null;
   const SectionView = SECTION_VIEWS[activeSection] ?? DashboardSection;
   const meta = inWorkspace
-    ? { title: "Project workspace", context: "Isolated run environment" }
-    : (SECTION_META[activeSection] ?? SECTION_META.dashboard);
+    ? { title: projectName ?? "Opening project…", context: "Editor" }
+    : SECTION_META[activeSection] ?? SECTION_META.dashboard;
 
-  function handleSelectSection(id) {
+  const handleSelectSection = useCallback((id) => {
+    if (id === "editor") {
+      return;
+    }
     setWorkspaceId(null);
+    setProjectName(null);
     setActiveSection(id);
-  }
+  }, []);
+
+  const handleBackToProjects = useCallback(() => {
+    setWorkspaceId(null);
+    setProjectName(null);
+  }, []);
+
+  const handleOpenProject = useCallback((id) => {
+    setProjectName(null);
+    setWorkspaceId(id);
+  }, []);
+
+  const handleProjectLoaded = useCallback((project) => {
+    setProjectName(project.name);
+  }, []);
 
   return (
     <AppLayout
-      sidebar={<Sidebar active={inWorkspace ? "dashboard" : activeSection} onSelect={handleSelectSection} />}
-      header={<AppHeader title={meta.title} context={inWorkspace ? "Project workspace" : meta.context} />}
-      audioTray={inWorkspace}
+      sidebar={
+        <Sidebar
+          active={inWorkspace ? "editor" : activeSection}
+          onSelect={handleSelectSection}
+          collapsed={navigationCollapsed}
+          inWorkspace={inWorkspace}
+        />
+      }
+      header={
+        <AppHeader
+          title={meta.title}
+          context={meta.context}
+          navigationCollapsed={navigationCollapsed}
+          onToggleNavigation={() => setNavigationCollapsed((value) => !value)}
+          inspectorOpen={inspectorOpen}
+          showInspectorToggle={inWorkspace}
+          onToggleInspector={() => setInspectorOpen((value) => !value)}
+        />
+      }
     >
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
@@ -57,21 +94,26 @@ export default function App() {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: MOTION.standard, ease: EASING.entrance }}
+          className="h-full min-h-0 min-w-0"
         >
           {inWorkspace ? (
             <WorkspaceSection
               projectId={workspaceId}
-              onBack={() => setWorkspaceId(null)}
+              inspectorOpen={inspectorOpen}
+              onProjectLoaded={handleProjectLoaded}
+              onBack={handleBackToProjects}
             />
           ) : (
-            <SectionView
-              {...(activeSection === "dashboard"
-                ? { onOpenProject: setWorkspaceId }
-                : {})}
-              {...(["prompts", "audio"].includes(activeSection)
-                ? { section: activeSection }
-                : {})}
-            />
+            <div className="h-full min-h-0 overflow-y-auto px-5 py-4">
+              <SectionView
+                {...(activeSection === "dashboard"
+                  ? { onOpenProject: handleOpenProject }
+                  : {})}
+                {...(["prompts", "audio"].includes(activeSection)
+                  ? { section: activeSection }
+                  : {})}
+              />
+            </div>
           )}
         </motion.div>
       </AnimatePresence>
