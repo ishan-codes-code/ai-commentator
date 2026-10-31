@@ -15,3 +15,9 @@ Create one file per decision: `docs/decisions/NNNN-short-title.md`, with:
 
 Keep each ADR to one focused decision. Routine implementation choices do
 not need an ADR; record choices that constrain future work.
+
+## Records
+
+- [0001 — Docker-first development](0001-docker-first-development.md)
+- [0002 — Native Electron and Python development](0002-native-electron-python.md)
+- [0003 — Modular engine and Electron main process](0003-modular-engine-and-electron-process.md)
