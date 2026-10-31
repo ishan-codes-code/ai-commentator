@@ -1,1 +1,1 @@
-{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["./src/*"]}}, "exclude": ["node_modules", "out", ".vite"]}
+{"compilerOptions": {"paths": {"@/*": ["./src/*"]}}, "exclude": ["node_modules", "out", ".vite"]}
