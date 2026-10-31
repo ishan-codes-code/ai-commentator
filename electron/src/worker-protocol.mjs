@@ -120,6 +120,52 @@ function resolvePythonExecutable(repoRoot) {
   return { executable: null, source: 'venv', missing: executable };
 }
 
+/** True when a vision API key is present in the given environment. */
+function isVisionConfigured(env = process.env) {
+  const key =
+    env && typeof env.BASETEN_API_KEY === 'string'
+      ? env.BASETEN_API_KEY.trim()
+      : '';
+  return key !== '';
+}
+
+/**
+ * Build the worker argv from validated main-process inputs. Throws on
+ * an invalid limit so the IPC handler can reject before spawning.
+ * Only known flags are ever emitted; renderer input cannot inject
+ * arbitrary arguments.
+ */
+function buildWorkerArgv(script, videoPath, opts = {}) {
+  const options = opts && typeof opts === 'object' ? opts : {};
+  const argv = [script, videoPath];
+  if (options.outputDir) {
+    argv.push('--output-dir', String(options.outputDir));
+  }
+  if (options.limit !== undefined && options.limit !== null) {
+    const limit =
+      typeof options.limit === 'number'
+        ? options.limit
+        : Number(String(options.limit).trim());
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error('limit must be a positive integer.');
+    }
+    argv.push('--limit', String(limit));
+  }
+  if (options.jobs !== undefined && options.jobs !== null) {
+    argv.push('--jobs', String(options.jobs));
+  }
+  if (options.force) {
+    argv.push('--force');
+  }
+  if (options.skipVision) {
+    argv.push('--skip-vision');
+  }
+  if (options.withScript) {
+    argv.push('--with-script');
+  }
+  return argv;
+}
+
 function resolveWorkerScript(repoRoot) {
   const script = path.join(repoRoot, 'python', 'worker.py');
   if (fs.existsSync(script)) {
@@ -131,7 +177,9 @@ function resolveWorkerScript(repoRoot) {
 export {
   SUPPORTED_VIDEO_EXTENSIONS,
   MESSAGE_TYPES,
+  buildWorkerArgv,
   createLineParser,
+  isVisionConfigured,
   validateVideoInput,
   isValidWorkerMessage,
   resolvePythonExecutable,

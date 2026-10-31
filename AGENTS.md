@@ -71,6 +71,7 @@ Read this file and the relevant `docs/` pages before implementing any task.
 - Security boundaries: `nodeIntegration` stays disabled and
   `contextIsolation` stays enabled. `preload.js` exposes only
   `processVideo`, `cancelProcessing`, `onWorkerEvent`, `selectVideo`,
+  `visionStatus` (key-configured boolean only, never the key value),
   and the project IPC (`list-projects`, `create-project`, `open-project`,
   `update-project`, `delete-project`, `list-artifacts`, `read-artifact`) via
   `contextBridge` — no unrestricted Node.js APIs, no API keys, and no

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   processVideo: (videoPath, options) =>
     ipcRenderer.invoke('process-video', videoPath, options ?? {}),
   cancelProcessing: () => ipcRenderer.invoke('cancel-processing'),
+  visionStatus: () => ipcRenderer.invoke('vision-status'),
   selectVideo: () => ipcRenderer.invoke('select-video'),
   listProjects: () => ipcRenderer.invoke('list-projects'),
   createProject: (name, sourcePath) =>

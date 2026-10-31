@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
@@ -394,6 +395,165 @@ class WorkerOfflineRunTests(unittest.TestCase):
             scripted = worker.plan_stages(flags(True, True), seeded)
             self.assertEqual(scripted[-1], ("script", "run"))
 
+
+
+
+class VisionModeTests(unittest.TestCase):
+    """Vision-enabled runs: limit plumbing, honest failure, cache reuse.
+
+    Paid API calls are never made here: ``run_vision_batch`` is mocked
+    and subprocess runs use the key-stripped offline environment.
+    """
+
+    def run_pipeline_quiet(self, args):
+        import io
+        import json
+
+        buffer = io.StringIO()
+        real = worker.REAL_STDOUT
+        worker.REAL_STDOUT = buffer
+        try:
+            code, data = worker.run_pipeline(args)
+        finally:
+            worker.REAL_STDOUT = real
+        messages = [json.loads(line) for line in buffer.getvalue().splitlines()]
+        return code, data, messages
+
+    def vision_args(self, video, out, **overrides):
+        import types
+
+        kwargs = {
+            "video": video,
+            "output_dir": out,
+            "limit": 10,
+            "force": False,
+            "jobs": None,
+            "skip_vision": False,
+            "with_script": False,
+        }
+        kwargs.update(overrides)
+        return types.SimpleNamespace(**kwargs)
+
+    def test_limit_ten_reaches_vision_batch_and_completes_full(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+
+            def fake_batch(limit, force, jobs, directory, observations_dir):
+                seed_observations(Path(observations_dir))
+                return 0
+
+            with mock.patch.object(
+                worker.engine, "run_vision_batch", side_effect=fake_batch
+            ) as batch:
+                code, data, messages = self.run_pipeline_quiet(
+                    self.vision_args(str(video), str(out))
+                )
+        self.assertEqual(code, 0)
+        batch.assert_called_once()
+        _, kwargs = batch.call_args
+        self.assertEqual(kwargs["limit"], 10)
+        self.assertFalse(kwargs["force"])
+        self.assertEqual(kwargs["jobs"], worker.engine.DEFAULT_VISION_BATCH_JOBS)
+        self.assertEqual(data["mode"], "full")
+        self.assertEqual(
+            data["stages"],
+            [
+                "frame_extraction",
+                "vision_analysis",
+                "state_rebuild",
+                "event_detection",
+                "commentary",
+            ],
+        )
+        self.assertEqual(data["skipped"], [])
+        self.assertGreater(data["observations"], 0)
+        self.assertIsNotNone(data["artifacts"]["state"])
+        self.assertIsNotNone(data["artifacts"]["events"])
+        self.assertIsNotNone(data["artifacts"]["commentary"])
+        totals = {
+            message["total"]
+            for message in messages
+            if message["type"] in ("progress", "stage_completed")
+        }
+        self.assertEqual(totals, {5})
+        # run_pipeline returns (code, data); the terminal `result`
+        # message is emitted by main(). Code 0 plus the full stage
+        # list above is this path's success signal.
+
+    def test_vision_failure_fails_run_without_downstream_results(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            with mock.patch.object(
+                worker.engine, "run_vision_batch", return_value=1
+            ):
+                code, data, messages = self.run_pipeline_quiet(
+                    self.vision_args(str(video), str(out))
+                )
+        self.assertEqual(code, 1)
+        self.assertEqual(data, {})
+        errors = [m for m in messages if m["type"] == "error"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["stage"], "vision_analysis")
+        self.assertFalse([m for m in messages if m["type"] == "result"])
+
+    def test_seeded_observations_reused_for_full_offline_run(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            seed_observations(out / "observations")
+            proc = run_worker(
+                str(video),
+                "--output-dir",
+                str(out),
+                "--skip-vision",
+            )
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr[-2000:])
+        messages = parse_stdout_lines(proc)
+        data = messages[-1]["data"]
+        self.assertEqual(data["mode"], "full")
+        self.assertIn("state_rebuild", data["stages"])
+        self.assertIn("event_detection", data["stages"])
+        self.assertIn("commentary", data["stages"])
+        self.assertEqual(data["skipped"], ["vision_analysis"])
+
+    def test_vision_mode_without_key_fails_fast_before_extraction(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            proc = run_worker(
+                str(video),
+                "--output-dir",
+                str(out),
+                "--limit",
+                "10",
+                env=offline_env(),
+            )
+        self.assertEqual(proc.returncode, 1)
+        messages = parse_stdout_lines(proc)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["type"], "error")
+        self.assertEqual(messages[0]["stage"], "vision_analysis")
+        self.assertIn("BASETEN_API_KEY", messages[0]["message"])
+        self.assertFalse((root / "out").exists())
+
+    def test_limit_argument_parses_explicit_ten(self):
+        args = worker.build_parser().parse_args(["clip.mp4", "--limit", "10"])
+        self.assertEqual(args.limit, 10)
+        self.assertFalse(args.skip_vision)
 
 if __name__ == "__main__":
     unittest.main()

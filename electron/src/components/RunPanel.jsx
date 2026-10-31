@@ -6,7 +6,7 @@ import { Separator } from '@/components/ui/separator.jsx';
 import { Spinner } from '@/components/ui/spinner.jsx';
 import GlassCard from '@/primitives/GlassCard.jsx';
 import StatusIndicator from '@/primitives/StatusIndicator.jsx';
-import { STAGE_LABELS, stageLabel } from '@/lib/worker-view.js';
+import { STAGE_LABELS, stageDetailText, stageLabel } from '@/lib/worker-view.js';
 
 const STATUS_LABELS = {
   processing: 'Processing',
@@ -17,11 +17,19 @@ const STATUS_LABELS = {
 
 function StageRow({ stage, info, active }) {
   const status = info?.status;
+  const detail = stageDetailText(info?.detail);
   return (
     <li className="flex items-center justify-between gap-2 py-1.5">
       <span className="flex min-w-0 items-center gap-2 text-sm">
         {active ? <Spinner /> : null}
-        <span className="truncate text-[13px] text-foreground">{stageLabel(stage)}</span>
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate text-[13px] text-foreground">{stageLabel(stage)}</span>
+          {detail ? (
+            <span className="truncate font-mono text-[11px] text-muted-foreground">
+              {detail}
+            </span>
+          ) : null}
+        </span>
       </span>
       {status === 'done' ? (
         <Badge variant="secondary">Done</Badge>
@@ -141,6 +149,12 @@ export default function RunPanel({
               Frame extraction succeeded. No AI analysis was performed —
               vision was skipped and this project has no observations to
               rebuild from.
+            </p>
+          ) : null}
+          {run.result.mode === 'full' ? (
+            <p className="text-[13px] text-muted-foreground">
+              AI analysis complete. Counts below are measured from this
+              run&apos;s artifacts.
             </p>
           ) : null}
           <ResultRows result={run.result} />

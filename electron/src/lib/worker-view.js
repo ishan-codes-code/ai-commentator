@@ -30,6 +30,47 @@ export function stageLabel(stage) {
   return STAGE_LABELS[stage] ?? stage;
 }
 
+export const SKIP_REASONS = {
+  'option-skipped': 'Skipped by run options',
+  'no-observations': 'No observations available',
+};
+
+export function skipReasonLabel(reason) {
+  if (!reason) {
+    return '';
+  }
+  return SKIP_REASONS[reason] ?? reason;
+}
+
+const DETAIL_METRICS = [
+  ['frames', 'frames'],
+  ['observations', 'observations'],
+  ['events', 'events'],
+  ['lines', 'lines'],
+];
+
+/**
+ * One-line honest summary of a stage_completed detail object, using only
+ * real counts the worker reported (e.g. "10 observations"). Returns an
+ * empty string when there is nothing countable to show.
+ */
+export function stageDetailText(detail) {
+  if (!detail || typeof detail !== 'object') {
+    return '';
+  }
+  if (detail.skipped === true) {
+    return skipReasonLabel(detail.reason);
+  }
+  const parts = [];
+  for (const [key, label] of DETAIL_METRICS) {
+    const value = detail[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      parts.push(`${value} ${label}`);
+    }
+  }
+  return parts.join(' · ');
+}
+
 export const MAX_WORKER_LOGS = 50;
 
 export function createInitialRunState() {

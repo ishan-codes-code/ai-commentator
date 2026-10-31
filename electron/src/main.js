@@ -19,6 +19,8 @@ import {
   updateProject,
 } from './project-store.mjs';
 import {
+  buildWorkerArgv,
+  isVisionConfigured,
   resolvePythonExecutable,
   resolveWorkerScript,
   validateVideoInput,
@@ -243,24 +245,22 @@ ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
   if (!script) {
     return { ok: false, error: `Worker script not found at ${missingScript}.` };
   }
-  const argv = [script, videoPath];
-  if (opts.outputDir) {
-    argv.push('--output-dir', String(opts.outputDir));
+  // AI analysis is a paid run: refuse to spawn without a key rather
+  // than silently falling back to offline mode. The worker also
+  // fails fast, but this stops the job before any extraction work.
+  if (!opts.skipVision && !isVisionConfigured()) {
+    return {
+      ok: false,
+      error:
+        'AI analysis needs a Baseten API key. Set BASETEN_API_KEY in ' +
+        'the environment and restart the app, or use offline extraction.',
+    };
   }
-  if (opts.limit !== undefined) {
-    argv.push('--limit', String(opts.limit));
-  }
-  if (opts.jobs !== undefined) {
-    argv.push('--jobs', String(opts.jobs));
-  }
-  if (opts.force) {
-    argv.push('--force');
-  }
-  if (opts.skipVision) {
-    argv.push('--skip-vision');
-  }
-  if (opts.withScript) {
-    argv.push('--with-script');
+  let argv;
+  try {
+    argv = buildWorkerArgv(script, videoPath, opts);
+  } catch (err) {
+    return { ok: false, error: err?.message ?? 'Invalid run options.' };
   }
   const startedJob = workerManager.start({
     executable,
@@ -368,6 +368,15 @@ ipcMain.handle('read-artifact', async (_event, id, kind, name) => {
     };
   } catch (err) {
     return projectError(err);
+  }
+});
+
+ipcMain.handle('vision-status', async () => {
+  // Boolean only: the key value never crosses IPC.
+  try {
+    return { ok: true, configured: isVisionConfigured() };
+  } catch {
+    return { ok: true, configured: false };
   }
 });
 

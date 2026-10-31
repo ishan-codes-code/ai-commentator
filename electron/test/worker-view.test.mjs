@@ -6,6 +6,8 @@ import {
   STAGE_LABELS,
   applyWorkerMessage,
   createInitialRunState,
+  skipReasonLabel,
+  stageDetailText,
   stageLabel,
 } from '../src/lib/worker-view.js';
 import { extensionOf, fileNameOf, fileUrlOf, formatBytes, projectMediaUrl, timeAgo } from '../src/lib/format.js';
@@ -237,6 +239,28 @@ test('projectMediaUrl builds scoped protocol URLs', () => {
     projectMediaUrl('abc-123', 'frames', 'frame_00003.jpg'),
     'project://abc-123/frames/frame_00003.jpg',
   );
+});
+
+test('skipReasonLabel explains known skip reasons', () => {
+  assert.equal(skipReasonLabel('option-skipped'), 'Skipped by run options');
+  assert.equal(skipReasonLabel('no-observations'), 'No observations available');
+  assert.equal(skipReasonLabel('custom'), 'custom');
+  assert.equal(skipReasonLabel(''), '');
+  assert.equal(skipReasonLabel(null), '');
+});
+
+test('stageDetailText summarizes only real reported counts', () => {
+  assert.equal(stageDetailText({ frames: 3 }), '3 frames');
+  assert.equal(stageDetailText({ observations: 10 }), '10 observations');
+  assert.equal(stageDetailText({ events: 2 }), '2 events');
+  assert.equal(stageDetailText({ lines: 7 }), '7 lines');
+  assert.equal(
+    stageDetailText({ skipped: true, reason: 'no-observations' }),
+    'No observations available',
+  );
+  assert.equal(stageDetailText({ state: '/o/match_state.json' }), '');
+  assert.equal(stageDetailText(null), '');
+  assert.equal(stageDetailText({ frames: NaN }), '');
 });
 
 test('fileUrlOf builds file URLs from trusted absolute paths', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Mic, Play, Volume2 } from "lucide-react";
+import { ArrowLeft, Mic, Play, Sparkles, Volume2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
 import { Badge } from "@/components/ui/badge.jsx";
 import { Button } from "@/components/ui/button.jsx";
@@ -19,6 +19,13 @@ import {
   fileUrlOf,
   formatBytes,
 } from "@/lib/format.js";
+import {
+  RUN_MODES,
+  VISION_FRAME_LIMIT,
+  buildProcessOptions,
+  defaultRunMode,
+  isAiMode,
+} from "@/lib/run-options.js";
 
 const STATUS_LABELS = {
   idle: "Idle",
@@ -62,6 +69,9 @@ export default function WorkspaceSection({ projectId, onBack }) {
   const [error, setError] = useState(null);
   const [previewFailed, setPreviewFailed] = useState(false);
   const [run, setRun] = useState(() => createInitialRunState());
+  const [runMode, setRunMode] = useState(RUN_MODES.OFFLINE);
+  const [visionConfigured, setVisionConfigured] = useState(false);
+  const [visionChecked, setVisionChecked] = useState(false);
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState(null);
@@ -87,6 +97,26 @@ export default function WorkspaceSection({ projectId, onBack }) {
               : prev,
           );
           setLoading(false);
+        }
+        // Credential presence only — the key value never reaches the
+        // renderer. AI analysis is offered only when it can actually run.
+        if (typeof window.api?.visionStatus === "function") {
+          try {
+            const status = await window.api.visionStatus();
+            if (alive && status && status.ok === true) {
+              const configured = status.configured === true;
+              setVisionConfigured(configured);
+              setRunMode(defaultRunMode(configured));
+            }
+          } catch {
+            // Unknown: stay offline-safe.
+          } finally {
+            if (alive) {
+              setVisionChecked(true);
+            }
+          }
+        } else if (alive) {
+          setVisionChecked(true);
         }
       } catch (err) {
         if (alive) {
@@ -146,9 +176,10 @@ export default function WorkspaceSection({ projectId, onBack }) {
     setStarting(true);
     setCancelError(null);
     try {
+      const runOptions = buildProcessOptions(runMode);
       const res = await window.api.processVideo(project.sourceVideo.path, {
         projectId: project.id,
-        skipVision: true,
+        ...runOptions,
       });
       if (!mountedRef.current) {
         return;
@@ -304,6 +335,45 @@ export default function WorkspaceSection({ projectId, onBack }) {
             label={STATUS_LABELS[run.status] ?? run.status}
           />
         </div>
+        <div
+          className="flex flex-col gap-2"
+          role="group"
+          aria-label="Processing mode"
+        >
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={isAiMode(runMode) ? "default" : "outline"}
+              disabled={!canStart || !visionConfigured}
+              onClick={() => setRunMode(RUN_MODES.AI)}
+              aria-pressed={isAiMode(runMode)}
+              title={
+                visionConfigured
+                  ? `Analyze up to ${VISION_FRAME_LIMIT} frames with AI`
+                  : "AI analysis needs a Baseten API key"
+              }
+            >
+              <Sparkles data-icon="inline-start" />
+              AI analysis
+            </Button>
+            <Button
+              type="button"
+              variant={isAiMode(runMode) ? "outline" : "default"}
+              disabled={!canStart}
+              onClick={() => setRunMode(RUN_MODES.OFFLINE)}
+              aria-pressed={!isAiMode(runMode)}
+            >
+              Offline extraction
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {isAiMode(runMode)
+              ? `Analyzes up to ${VISION_FRAME_LIMIT} selected frames with the Baseten vision model (paid). Validated observations already on disk are reused.`
+              : visionChecked && !visionConfigured
+                ? "Offline-safe: vision analysis is skipped, so no API key is needed and no paid calls are made. Set BASETEN_API_KEY and restart to unlock AI analysis."
+                : "Offline-safe: vision analysis is skipped, so no API key is needed and no paid calls are made."}
+          </p>
+        </div>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
@@ -352,8 +422,7 @@ export default function WorkspaceSection({ projectId, onBack }) {
           </Alert>
         ) : null}
         <p className="text-xs text-muted-foreground">
-          Offline-safe: vision analysis is skipped, so no API key is needed
-          and no paid calls are made. Output stays inside this project.
+          Output stays inside this project.
         </p>
       </GlassCard>
 

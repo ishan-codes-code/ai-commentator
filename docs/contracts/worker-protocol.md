@@ -90,6 +90,21 @@ and `{type: "worker-exit", code, signal, cancelled}` when the child ends.
   `{"type": "error", "stage": "worker", "message": "Processing was cancelled."}`
   and exits `130`.
 
+## Electron run modes
+
+- Offline extraction: `--skip-vision` (no `--limit` passed). With no
+  observations, downstream stages skip with `no-observations` and the
+  run completes as `extraction-only`.
+- AI analysis: vision enabled with an explicit `--limit 10` from
+  Electron (`buildWorkerArgv` rejects non-positive limits before
+  spawn). The main process refuses AI runs without `BASETEN_API_KEY`
+  and the worker fails fast before any extraction work; the key value
+  never appears in any message. `vision-status` reports only whether
+  a key is configured.
+- One attempt per frame: the engine performs no automatic retries,
+  so a run spends at most one vision call per selected frame; cached
+  validated observations are reused unless `--force` is passed.
+
 Malformed stdout lines are never fatal to the parser: the Electron
 `createLineParser` counts them, forwards a `worker-log` note, and keeps
 parsing the rest of the stream. A clean worker ends stdout with a

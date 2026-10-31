@@ -361,9 +361,24 @@ thread.)
   media scheme (validated scopes/names/types, bare 404s).
 - Verified: 256/256 Python, 41/41 Electron (see task report).
 
+## Vision-enabled processing (Milestone 7, on
+`feature/video-import-processing`, uncommitted)
+
+- Workspace processing-mode selector: AI analysis (up to 10 frames,
+  default when a key is configured) vs offline extraction.
+- Explicit `--limit 10` via `buildWorkerArgv`; main-process key gate
+  before spawn plus `vision-status` IPC (boolean only); `limit`
+  validated before spawn, engine validates again.
+- RunPanel shows real stage detail counts and skip reasons; full runs
+  are labelled AI analysis, extraction-only runs keep their notice.
+  ArtifactBrowser already refetches on run-status change.
+- Verified: 261/261 Python (incl. 5 new vision-mode tests),
+  52/52 Electron (incl. 11 new), renderer build clean. Real
+  `--limit 10` run on `gameplay/match.mp4`: 66 frames, 10/10
+  observations, state rebuilt, 0 events (honest), 8 commentary lines.
+
 ## Recommended next milestone
 
-Dashboard artifact browsing in the Electron renderer (read-only views
-over the run `output/` tree), then
-roadmap milestone 9 (TTS and audio playback).
+Roadmap milestone 9 (TTS and audio playback), then adaptive frame
+sampling (explicit follow-up; not started).
 See [roadmap.md](roadmap.md).

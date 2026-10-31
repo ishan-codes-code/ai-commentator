@@ -5,8 +5,10 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  buildWorkerArgv,
   createLineParser,
   isValidWorkerMessage,
+  isVisionConfigured,
   resolvePythonExecutable,
   resolveWorkerScript,
   validateVideoInput,
@@ -113,4 +115,51 @@ test('resolveWorkerScript reports presence or absence', () => {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('buildWorkerArgv passes explicit limit for AI runs', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', {
+      outputDir: '/out',
+      limit: 10,
+      skipVision: false,
+    }),
+    ['worker.py', 'clip.mp4', '--output-dir', '/out', '--limit', '10'],
+  );
+});
+
+test('buildWorkerArgv omits vision flags for offline runs', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', {
+      outputDir: '/out',
+      skipVision: true,
+    }),
+    ['worker.py', 'clip.mp4', '--output-dir', '/out', '--skip-vision'],
+  );
+});
+
+test('buildWorkerArgv rejects non-positive limits', () => {
+  for (const limit of [0, -3, 2.5, 'many', NaN]) {
+    assert.throws(
+      () => buildWorkerArgv('worker.py', 'clip.mp4', { limit }),
+      /positive integer/,
+    );
+  }
+});
+
+test('buildWorkerArgv never invents flags from unknown options', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', {
+      skipVision: true,
+      extra: '--exec-evil',
+    }),
+    ['worker.py', 'clip.mp4', '--skip-vision'],
+  );
+});
+
+test('isVisionConfigured reads only presence of the key', () => {
+  assert.equal(isVisionConfigured({ BASETEN_API_KEY: 'secret' }), true);
+  assert.equal(isVisionConfigured({ BASETEN_API_KEY: '  ' }), false);
+  assert.equal(isVisionConfigured({}), false);
+  assert.equal(isVisionConfigured(null), false);
 });
