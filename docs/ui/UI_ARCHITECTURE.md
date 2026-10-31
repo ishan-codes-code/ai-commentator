@@ -36,8 +36,9 @@ electron/src/
   renderer.jsx            # entry: providers (MotionConfig), App
   app/
     App.jsx               # shell composition + active-section state
-    sections/             # Dashboard, Matches, Commentary, Settings
-      DashboardSection.jsx
+    sections/             # projects Dashboard + Workspace, stubs
+      DashboardSection.jsx  # Your Projects + Add Project flow
+      WorkspaceSection.jsx  # per-project workspace (preview/lanes/runs)
       MatchesSection.jsx
       CommentarySection.jsx
       SettingsSection.jsx
@@ -52,7 +53,6 @@ electron/src/
     useWorkerStatus.js    # shared worker subscription (header + card)
   components/
     WorkerStatus.jsx      # worker bridge subscriber (existing behavior)
-    VideoImport.jsx       # selection, preview, run lifecycle
     RunPanel.jsx          # presentational run states (progress/result/error)
     ui/                   # generated shadcn components (do not hand-edit)
   lib/
@@ -95,11 +95,13 @@ primitives. No section reaches past the layout layer into another section.
 
 ## State and data rules
 
-- The renderer is a thin client over `window.api` (`processVideo`,
-  `cancelProcessing`, `onWorkerEvent`, `selectVideo`). The `selectVideo`
-  addition (Stage 1, approved exception) is a read-only native dialog
-  plus main-side validation — no filesystem access reaches the renderer.
-  No other backend surface exists.
+- The renderer is a thin client over `window.api` (`processVideo`
+  with optional `projectId` binding, `cancelProcessing`, `onWorkerEvent`,
+  `selectVideo`, plus project CRUD: `list-projects`, `create-project`,
+  `open-project`, `update-project`, `delete-project`).
+  Projects live under Electron `userData` (see `project-store.mjs`);
+  All paths, validation, and atomic writes stay main-side — no
+  filesystem access reaches the renderer. No other backend surface exists.
 - Never invent worker data: unimplemented sections render honest empty
   states, never fake pipelines or mocked processing.
 - Event handling uses the shared `useWorkerStatus` hook (subscribe in

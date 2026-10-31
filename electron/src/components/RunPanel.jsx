@@ -74,6 +74,7 @@ export default function RunPanel({
   onCancel,
   onRetry,
   onChooseDifferent,
+  chooseDifferentLabel = "Choose different video",
 }) {
   const indicatorStatus =
     run.status === 'completed'
@@ -193,7 +194,7 @@ export default function RunPanel({
               Process again
             </Button>
             <Button type="button" variant="outline" onClick={onChooseDifferent}>
-              Choose different video
+              {chooseDifferentLabel}
             </Button>
           </>
         ) : null}

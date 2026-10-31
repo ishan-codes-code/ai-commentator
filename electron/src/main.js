@@ -4,6 +4,15 @@ import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWorkerManager } from './python-worker.mjs';
 import {
+  createProject,
+  deleteProject,
+  getProjectOutputDir,
+  getProject as getStoredProject,
+  listProjects,
+  openProject,
+  updateProject,
+} from './project-store.mjs';
+import {
   resolvePythonExecutable,
   resolveWorkerScript,
   validateVideoInput,
@@ -87,6 +96,33 @@ app.on('before-quit', () => {
   }
 });
 
+function bindProjectPaths(projectId) {
+  let project = null;
+  try {
+    project =
+      typeof projectId === 'string'
+        ? getStoredProject(app.getPath('userData'), projectId)
+        : null;
+  } catch {
+    project = null;
+  }
+  if (!project) {
+    return { error: 'Project not found.' };
+  }
+  const inputError = validateVideoInput(project.sourceVideo.path);
+  if (inputError) {
+    return { error: inputError };
+  }
+  return {
+    videoPath: project.sourceVideo.path,
+    outputDir: getProjectOutputDir(app.getPath('userData'), projectId),
+  };
+}
+
+function projectError(err) {
+  return { ok: false, error: err?.message ?? 'Project operation failed.' };
+}
+
 ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
   const inputError = validateVideoInput(videoPath);
   if (inputError) {
@@ -95,6 +131,17 @@ ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
   const opts = options && typeof options === 'object' ? options : {};
   if (workerManager.isBusy()) {
     return { ok: false, error: 'A video is already being processed.' };
+  }
+  // Project-bound runs ignore renderer-supplied paths: the source
+  // video and output directory resolve from stored project metadata,
+  // keeping per-project artifacts isolated by construction.
+  if (opts.projectId !== undefined) {
+    const bound = bindProjectPaths(opts.projectId);
+    if (bound.error) {
+      return { ok: false, error: bound.error };
+    }
+    videoPath = bound.videoPath;
+    opts.outputDir = bound.outputDir;
   }
   const root = repoRoot();
   const { executable, missing } = resolvePythonExecutable(root);
@@ -155,6 +202,52 @@ ipcMain.handle('process-video', async (_event, videoPath, options = {}) => {
     return { ok: false, error: 'A video is already being processed.' };
   }
   return { ok: true, pid: startedJob.pid };
+});
+
+ipcMain.handle('list-projects', async () => {
+  try {
+    return { ok: true, projects: listProjects(app.getPath('userData')) };
+  } catch (err) {
+    return projectError(err);
+  }
+});
+
+ipcMain.handle('create-project', async (_event, name, sourcePath) => {
+  try {
+    const project = createProject(app.getPath('userData'), { name, sourcePath });
+    return { ok: true, project };
+  } catch (err) {
+    return projectError(err);
+  }
+});
+
+ipcMain.handle('open-project', async (_event, id) => {
+  try {
+    const project = openProject(app.getPath('userData'), id);
+    return { ok: true, project };
+  } catch (err) {
+    return projectError(err);
+  }
+});
+
+ipcMain.handle('update-project', async (_event, id, patch) => {
+  try {
+    const project = updateProject(app.getPath('userData'), id, patch);
+    return { ok: true, project };
+  } catch (err) {
+    return projectError(err);
+  }
+});
+
+ipcMain.handle('delete-project', async (_event, id) => {
+  try {
+    if (workerManager.isBusy()) {
+      return { ok: false, error: 'Stop the active processing job first.' };
+    }
+    return { ok: true, ...deleteProject(app.getPath('userData'), id) };
+  } catch (err) {
+    return projectError(err);
+  }
 });
 
 ipcMain.handle('cancel-processing', async () => {

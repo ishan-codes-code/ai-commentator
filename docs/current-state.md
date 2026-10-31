@@ -327,6 +327,24 @@ thread.)
   area); control-state/a11y pass (labels, live regions, focus rings).
 - Verified: Electron suite, renderer build, dev boot (see task report).
 
+## Stage 1.5 — project-first dashboard + workspace (on `feature/video-import-processing`, uncommitted)
+
+- Approved project IPC in `main.js`/`preload.js` (`list-projects`,
+  `create-project`, `open-project`, `update-project`, `delete-project`)
+  plus `projectId`-bound `process-video` (main resolves source + output
+  from stored metadata). New `electron/src/project-store.mjs` (userData
+  storage, allow-listed ids, containment checks, atomic writes,
+  stage-then-rename creation) covered by
+  `electron/test/project-store.test.mjs` (6 tests).
+- Dashboard is project-first ("Your Projects" + Add Project flow with
+  naming step; rows with status; honest empty state; two-step delete).
+  New `WorkspaceSection` (preview + native playback, audio-lane
+  placeholders, project-bound processing via reused `RunPanel`,
+  per-project status persistence). `VideoImport` removed.
+- Verified: 34/34 Electron tests, 254/254 Python tests, renderer build
+  clean, dev boot with no app console errors, real offline run through
+  the mapper; per-project output isolation confirmed.
+
 ## Recommended next milestone
 
 Dashboard artifact browsing in the Electron renderer (read-only views

@@ -8,7 +8,7 @@ import {
   createInitialRunState,
   stageLabel,
 } from '../src/lib/worker-view.js';
-import { extensionOf, fileNameOf, fileUrlOf, formatBytes } from '../src/lib/format.js';
+import { extensionOf, fileNameOf, fileUrlOf, formatBytes, timeAgo } from '../src/lib/format.js';
 
 test('stageLabel maps known stages and passes unknown through', () => {
   assert.equal(stageLabel('frame_extraction'), 'Frame extraction');
@@ -218,6 +218,18 @@ test('format helpers handle names, extensions, and sizes', () => {
   assert.equal(formatBytes(1048576), '1 MB');
   assert.equal(formatBytes(-1), '—');
   assert.equal(formatBytes(Number.NaN), '—');
+});
+
+test('timeAgo renders relative times without throwing', () => {
+  const now = Date.parse('2026-10-31T12:00:00.000Z');
+  assert.equal(timeAgo('2026-10-31T11:59:30.000Z', now), 'just now');
+  assert.equal(timeAgo('2026-10-31T11:55:00.000Z', now), '5m ago');
+  assert.equal(timeAgo('2026-10-31T10:00:00.000Z', now), '2h ago');
+  assert.equal(timeAgo('2026-10-28T12:00:00.000Z', now), '3d ago');
+  assert.equal(timeAgo('2026-08-31T12:00:00.000Z', now), '2mo ago');
+  assert.equal(timeAgo('2024-10-31T12:00:00.000Z', now), '2y ago');
+  assert.equal(timeAgo('not-a-date', now), '—');
+  assert.equal(timeAgo(null, now), '—');
 });
 
 test('fileUrlOf builds file URLs from trusted absolute paths', () => {

@@ -46,6 +46,30 @@ otherwise.
   stage progress and completes; cancel stops the run; invalid paths show
   the main-process validation error.
 - Excludes: paid stages from the UI default path; output browsing.
+- Note: the Stage 1 import-first dashboard composition was superseded
+  by the project-first dashboard below. `VideoImport` was removed;
+  `RunPanel`, `worker-view`, and the offline default were reused.
+
+## Stage 1.5 — Project-first dashboard + workspace (implemented, on `feature/video-import-processing`, uncommitted)
+
+- Depends on: Stage 1.
+- [x] Approved exception: project IPC in `main.js`/`preload.js`
+  (`list-projects`, `create-project`, `open-project`,
+  `update-project`, `delete-project`) plus `projectId`-bound
+  `process-video` (main resolves source + output from metadata).
+- [x] `project-store.mjs`: userData storage, allow-listed ids,
+  containment checks, atomic writes, stage-then-rename creation,
+  validated loads; covered by `electron/test/project-store.test.mjs`.
+- [x] Dashboard: "Your Projects" + Add Project (native picker → name
+  → isolated copy → open workspace); rows with name, source, size,
+  last-opened, status; honest empty state; two-step delete.
+- [x] Workspace: project header, gameplay preview + native playback,
+  original-game-audio and AI-commentary lanes (honest not-implemented
+  states), project-bound Process, reused `RunPanel`, per-project
+  status persistence.
+- Acceptance: create/reopen/delete projects; per-project output
+  isolation; offline run from workspace completes; cancel works.
+- Excludes: artifact browsing, project rename, TTS, live capture.
 
 ## Stage 2 — Dashboard data
 
