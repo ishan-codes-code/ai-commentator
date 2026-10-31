@@ -5,7 +5,7 @@ Foundation milestone first; no stage starts before its dependencies.
 Anything not listed here is out of scope until a roadmap update says
 otherwise.
 
-## Stage 0 — Foundation (this milestone)
+## Stage 0 — Foundation and Commentary Studio shell (implemented)
 
 - [x] Dependencies: `motion`, `lucide-react`, `@fontsource/inter`,
   `@fontsource/geist-mono`, shadcn runtime deps (`cn`, `radix-ui`,
@@ -15,14 +15,15 @@ otherwise.
   `jsconfig.json`), initial components
   (button, card, badge, separator, skeleton; alert + spinner added in
   Stage 1).
-- [x] Obsidian tokens in `index.css`; six `docs/ui/` documents; AGENTS.md
-  UI section.
-- [x] App shell: `AppLayout` + `Sidebar` + `PageHeader` + `GlassPanel` /
-  `GlassCard` + `StatusIndicator`; placeholder sections (Dashboard empty
-  state; Matches/Commentary/Settings stubs); `WorkerStatus` preserved.
-- Acceptance: `npm test` green; dev app renders the shell with working
-  nav, empty dashboard, live worker status, no console errors; tokens,
-  alias, and reduced-motion verified.
+- [x] Monochrome semantic tokens, neutral action hierarchy, compact type
+  and radius scales, and synchronized design-token documentation.
+- [x] Windowed startup with normal operating-system controls and isolated
+  preload configuration (current default: 900 × 650).
+- [x] Studio shell with Editor, AI Prompts, AI Analysis, Audio, and Settings
+  navigation; live worker status; flexible project preview; persistent
+  honest audio tray; project and processing flows preserved.
+- Verification: see `docs/current-state.md` and the task handoff for the
+  actual test and packaging results from this environment.
 
 ## Stage 1 — Video selection + processing wiring (implemented, on `feature/video-import-processing`, uncommitted)
 

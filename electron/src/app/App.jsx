@@ -8,6 +8,7 @@ import MatchesSection from "@/app/sections/MatchesSection.jsx";
 import CommentarySection from "@/app/sections/CommentarySection.jsx";
 import SettingsSection from "@/app/sections/SettingsSection.jsx";
 import WorkspaceSection from "@/app/sections/WorkspaceSection.jsx";
+import StudioPlaceholder from "@/app/sections/StudioPlaceholder.jsx";
 import { MOTION, EASING } from "@/lib/tokens.js";
 
 const SECTION_VIEWS = {
@@ -15,13 +16,17 @@ const SECTION_VIEWS = {
   matches: MatchesSection,
   commentary: CommentarySection,
   settings: SettingsSection,
+  prompts: StudioPlaceholder,
+  audio: StudioPlaceholder,
 };
 
 const SECTION_META = {
   dashboard: { title: "Your Projects", context: "Local project library" },
-  matches: { title: "Matches", context: "Recorded matches" },
+  matches: { title: "AI Analysis", context: "Validated observations and events" },
   commentary: { title: "Commentary", context: "Generated lines and scripts" },
   settings: { title: "Settings", context: "Application preferences" },
+  prompts: { title: "AI Prompts", context: "Prompt inspection is planned" },
+  audio: { title: "Audio", context: "Playback lanes are not available yet" },
 };
 
 export default function App() {
@@ -41,8 +46,9 @@ export default function App() {
 
   return (
     <AppLayout
-      sidebar={<Sidebar active={inWorkspace ? "" : activeSection} onSelect={handleSelectSection} />}
-      header={<AppHeader title={meta.title} context={meta.context} />}
+      sidebar={<Sidebar active={inWorkspace ? "dashboard" : activeSection} onSelect={handleSelectSection} />}
+      header={<AppHeader title={meta.title} context={inWorkspace ? "Project workspace" : meta.context} />}
+      audioTray={inWorkspace}
     >
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
@@ -61,6 +67,9 @@ export default function App() {
             <SectionView
               {...(activeSection === "dashboard"
                 ? { onOpenProject: setWorkspaceId }
+                : {})}
+              {...(["prompts", "audio"].includes(activeSection)
+                ? { section: activeSection }
                 : {})}
             />
           )}

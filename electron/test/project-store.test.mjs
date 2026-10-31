@@ -350,6 +350,13 @@ test('media resolver confines access to listed project files', (t) => {
 
   const resolved = resolveProjectMedia(base, created.id, 'frames', 'frame_00003.jpg');
   assert.equal(resolved, path.join(out, 'frames', 'frame_00003.jpg'));
+  assert.equal(
+    resolveProjectMedia(base, created.id, 'source', path.basename(created.sourceVideo.path)),
+    created.sourceVideo.path,
+  );
+  assert.throws(() => resolveProjectMedia(base, created.id, 'source', 'other.mp4'), /Media not found/);
+  assert.throws(() => resolveProjectMedia(base, created.id, 'source', 'project.json'), /Unsupported media type/);
+  assert.throws(() => resolveProjectMedia(base, created.id, 'source', '../match.mp4'), /Invalid media name/);
   assert.throws(() => resolveProjectMedia(base, created.id, 'frames', 'notes.txt'), /Unsupported media type/);
   assert.throws(() => resolveProjectMedia(base, created.id, 'output', 'frames'), /Unsupported media scope/);
   assert.throws(() => resolveProjectMedia(base, created.id, 'frames', '../evil.jpg'), /Invalid media name/);

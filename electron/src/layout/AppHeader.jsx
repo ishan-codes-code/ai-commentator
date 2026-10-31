@@ -19,13 +19,13 @@ export default function AppHeader({ title, context }) {
   const { status } = useWorkerStatus();
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-5">
+    <header className="flex h-11 shrink-0 items-center justify-between gap-4 border-b border-border bg-surface px-4">
       <div className="flex min-w-0 items-baseline gap-2">
         <h1 className="truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground">
           {title}
         </h1>
         {context ? (
-          <span className="hidden truncate text-xs text-subtle sm:inline">
+          <span className="hidden truncate text-[11px] text-subtle sm:inline">
             {context}
           </span>
         ) : null}

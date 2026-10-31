@@ -9,20 +9,22 @@ see [../architecture.md](../architecture.md) and
 
 - `electron/src/renderer.jsx` — React entry, renders `App` (fonts + `MotionConfig reducedMotion="user"`).
 - `electron/src/app/` — `App.jsx` shell with section state; `sections/`
-  `DashboardSection` (video import + runs), `MatchesSection`,
-  `CommentarySection`, `SettingsSection` (honest stubs).
-- `electron/src/layout/` — `AppLayout`, `Sidebar`, `PageHeader`.
+  includes the project library, project workspace, analysis/commentary
+  views, settings, and honest prompt/audio placeholders.
+- `electron/src/layout/` — `AppLayout`, `Sidebar`, and `AppHeader`;
+  `AppLayout` shows a compact audio tray only while a project workspace is open.
 - `electron/src/primitives/` — `GlassPanel`, `GlassCard`, `StatusIndicator`.
-- `electron/src/components/VideoImport.jsx` — selection, preview, and
-  run lifecycle over the audited `window.api` bridge (offline-safe
-  `{ skipVision: true }` default).
+- `electron/src/app/sections/DashboardSection.jsx` — project creation,
+  listing, opening, and deletion through the audited `window.api` bridge.
+- `electron/src/app/sections/WorkspaceSection.jsx` — project media preview,
+  project-bound processing, worker lifecycle, and artifact browsing.
 - `electron/src/components/RunPanel.jsx` — presentational run states
   driven by `lib/worker-view.js`.
-- `electron/src/components/WorkerStatus.jsx` — subscribes to
-  `window.api.onWorkerEvent`, renders idle/processing/done/error states.
-  This is the only renderer feature with backend behavior and must keep
-  working unchanged in spirit (restyle allowed, mock state forbidden).
-- `electron/src/index.css` — Tailwind v4 entry, `@theme` Obsidian tokens.
+- `electron/src/components/WorkerStatus.jsx` — dashboard worker status;
+  `AppHeader` also reads live status through `useWorkerStatus`. Worker
+  state comes only from real events, never mock state.
+- `electron/src/index.css` — Tailwind v4 entry, `@theme` monochrome studio
+  tokens.
 - `electron/src/components/ui/*` — shadcn primitives (button, card, badge,
   separator, skeleton). Generated code; edit only to fix integration bugs.
 - `electron/src/lib/` — `cn` via the `cn` package; app-owned helpers

@@ -4,42 +4,42 @@
   color-scheme: dark;
 
   /* Obsidian Studio raw palette (near-black, deliberate steps) */
-  --studio-950: #030304;
-  --studio-900: #08080a;
-  --studio-850: #0c0c10;
-  --studio-800: #121218;
+  --studio-950: #09090a;
+  --studio-900: #101011;
+  --studio-850: #171718;
+  --studio-800: #202021;
 
   /* Semantic tokens (dark-only theme) */
   --background: var(--studio-950);
-  --foreground: #f5f5f7;
+  --foreground: #f1f1f1;
   --card: var(--studio-900);
-  --card-foreground: #f5f5f7;
+  --card-foreground: #f1f1f1;
   --popover: var(--studio-850);
   --popover-foreground: #f5f5f7;
-  --primary: #9670ff;
-  --primary-foreground: #f5f5f7;
-  --secondary: #38bdf8;
-  --secondary-foreground: #030304;
+  --primary: #ededed;
+  --primary-foreground: #111112;
+  --secondary: #242425;
+  --secondary-foreground: #ededed;
   --muted: var(--studio-800);
-  --muted-foreground: #92929d;
+  --muted-foreground: #a1a1a4;
   --accent: var(--studio-800);
-  --accent-foreground: #f5f5f7;
+  --accent-foreground: #f1f1f1;
   --destructive: #ef4444;
   --destructive-foreground: #f5f5f7;
   --success: #22c55e;
   --warning: #f59e0b;
-  --border: #1c1c24;
-  --input: #1c1c24;
-  --ring: #9670ff;
+  --border: #2a2a2b;
+  --input: #303031;
+  --ring: #b9b9bb;
 
   /* Project surfaces */
   --surface: var(--studio-900);
   --surface-raised: var(--studio-850);
   --elevated: var(--studio-800);
-  --glass: rgba(12, 12, 16, 0.82);
-  --glass-border: #262630;
+  --glass: rgba(23, 23, 24, 0.96);
+  --glass-border: #303031;
 
-  --radius: 0.5rem;
+  --radius: 0.375rem;
 }
 
 @theme inline {
@@ -55,7 +55,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
-  --color-subtle: #686873;
+  --color-subtle: #77777b;
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
@@ -80,9 +80,9 @@
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
   --radius-xl: calc(var(--radius) + 4px);
-  --radius-card: 0.625rem;
-  --radius-panel: 0.75rem;
-  --radius-dialog: 0.875rem;
+  --radius-card: 0.5rem;
+  --radius-panel: 0.625rem;
+  --radius-dialog: 0.75rem;
 
   --backdrop-blur-glass: 16px;
 

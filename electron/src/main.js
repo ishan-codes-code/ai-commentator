@@ -21,7 +21,12 @@ if (started) {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'project',
-    privileges: { standard: true, secure: true, supportFetchAPI: true },
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
   },
 ]);
 

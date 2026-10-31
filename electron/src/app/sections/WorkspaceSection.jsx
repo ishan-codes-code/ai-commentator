@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Mic, Play, Sparkles, Volume2 } from "lucide-react";
+import { ArrowLeft, Play, Sparkles } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
 import { Badge } from "@/components/ui/badge.jsx";
 import { Button } from "@/components/ui/button.jsx";
@@ -16,8 +16,8 @@ import {
 import {
   extensionOf,
   fileNameOf,
-  fileUrlOf,
   formatBytes,
+  projectMediaUrl,
 } from "@/lib/format.js";
 import {
   RUN_MODES,
@@ -44,18 +44,6 @@ const STATUS_BADGE = {
   cancelled: "outline",
   interrupted: "outline",
 };
-
-function AudioLane({ icon: Icon, title, children }) {
-  return (
-    <GlassCard className="flex flex-col gap-1.5 p-4">
-      <div className="flex items-center gap-2">
-        <Icon className="size-4 text-muted-foreground" aria-hidden />
-        <h3 className="text-[13px] font-medium text-foreground">{title}</h3>
-      </div>
-      {children}
-    </GlassCard>
-  );
-}
 
 /**
  * Dedicated workspace for one opened project. The source video lives in
@@ -265,12 +253,11 @@ export default function WorkspaceSection({ projectId, onBack }) {
     );
   }
 
-  const fileUrl = fileUrlOf(project.sourceVideo.path);
-  // `file://` media loads only from a `file:` origin (packaged app).
-  // Under the dev server the attempt is rejected, so go straight to
-  // the honest fallback instead of logging a console error.
-  const canPreviewFiles =
-    typeof window !== "undefined" && window.location.protocol === "file:";
+  const videoUrl = projectMediaUrl(
+    project.id,
+    "source",
+    fileNameOf(project.sourceVideo.path),
+  );
   const indicatorStatus =
     run.status === "completed"
       ? "done"
@@ -279,7 +266,7 @@ export default function WorkspaceSection({ projectId, onBack }) {
         : run.status;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
@@ -299,22 +286,22 @@ export default function WorkspaceSection({ projectId, onBack }) {
         </Badge>
       </div>
 
-      <GlassCard className="flex flex-col gap-3 p-5">
-        {fileUrl && !previewFailed && canPreviewFiles ? (
+      <div className="flex min-w-0 flex-col gap-2">
+        {videoUrl && !previewFailed ? (
           <video
             key={project.sourceVideo.path}
-            src={fileUrl}
+            src={videoUrl}
             controls
             preload="metadata"
             aria-label={`${project.name} gameplay preview`}
             onError={() => setPreviewFailed(true)}
-            className="aspect-video w-full rounded-card border border-border bg-background"
+            className="aspect-video max-h-[58vh] w-full rounded-sm border border-border bg-background object-contain"
           >
             <track kind="captions" />
             Preview unavailable for this file.
           </video>
         ) : (
-          <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-background px-4 py-8 text-center">
+          <div className="flex aspect-video max-h-[58vh] flex-col items-center justify-center gap-2 rounded-sm border border-border bg-background px-4 py-8 text-center">
             <p className="text-[13px] font-medium text-foreground">
               Preview unavailable for this file
             </p>
@@ -424,21 +411,6 @@ export default function WorkspaceSection({ projectId, onBack }) {
         <p className="text-xs text-muted-foreground">
           Output stays inside this project.
         </p>
-      </GlassCard>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <AudioLane icon={Volume2} title="Original game audio">
-          <p className="text-xs text-muted-foreground">
-            Audio extraction is not implemented yet — this lane will carry
-            the gameplay soundtrack.
-          </p>
-        </AudioLane>
-        <AudioLane icon={Mic} title="AI commentary">
-          <p className="text-xs text-muted-foreground">
-            Text-to-speech is not implemented yet — generated commentary
-            will play here.
-          </p>
-        </AudioLane>
       </div>
 
       {run.status !== "idle" ? (

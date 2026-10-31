@@ -1,5 +1,19 @@
 # Current state
 
+## Commentary Studio UI foundation
+
+The Electron renderer now opens into a 900 × 650 windowed studio shell with
+compact section navigation and a live worker-status header. The project
+workspace contains a compact three-lane audio tray. The Editor retains the
+project library, project-bound processing, project media preview, run status,
+and artifact browsing. Project source video preview uses the main-process `project://`
+protocol, including under the Vite development server. The protocol only
+serves the source filename recorded in project metadata. Prompt inspection
+and standalone audio playback remain explicit placeholders. The UI token
+palette is monochromatic; status accents remain semantic. The window retains
+normal operating-system controls. No Python engine or worker protocol behavior
+changed.
+
 ## Modularization status
 
 Project storage is implemented under `electron/src/project-store/`: `metadata.mjs`

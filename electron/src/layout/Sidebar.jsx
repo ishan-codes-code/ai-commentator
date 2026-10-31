@@ -1,81 +1,63 @@
-import { motion } from "motion/react";
 import {
   AudioLines,
-  LayoutDashboard,
-  MessagesSquare,
+  AudioWaveform,
+  Clapperboard,
+  ScanSearch,
   Settings,
-  Trophy,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "cn";
 import { Separator } from "@/components/ui/separator.jsx";
-import { MOTION } from "@/lib/tokens.js";
 
 const ITEMS = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { id: "matches", label: "Matches", icon: Trophy },
-  { id: "commentary", label: "Commentary", icon: MessagesSquare },
+  { id: "dashboard", label: "Editor", icon: Clapperboard },
+  { id: "prompts", label: "AI Prompts", icon: Sparkles },
+  { id: "matches", label: "AI Analysis", icon: ScanSearch },
+  { id: "audio", label: "Audio", icon: AudioWaveform },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
-/**
- * Application sidebar: brand mark, section navigation, environment
- * footer. Solid surface with a right hairline; density suited to
- * desktop software (13px labels, 8px control rhythm).
- */
 export default function Sidebar({ active, onSelect }) {
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-surface">
-      <div className="flex h-12 items-center gap-2.5 px-4">
-        <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-          <AudioLines className="size-4" aria-hidden />
+    <aside className="flex w-[196px] shrink-0 flex-col border-r border-border bg-surface">
+      <div className="flex h-11 items-center gap-2.5 px-3.5">
+        <span className="flex size-6 items-center justify-center rounded-sm bg-foreground text-background">
+          <AudioLines className="size-3.5" aria-hidden />
         </span>
-        <span className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground">
-            AI Commentator
-          </span>
-          <span className="text-[11px] text-subtle">Obsidian Studio</span>
+        <span className="truncate text-[12px] font-semibold tracking-[-0.01em] text-foreground">
+          Commentary Studio
         </span>
       </div>
       <Separator />
-      <nav
-        aria-label="Sections"
-        className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 py-3"
-      >
-        {ITEMS.map((item) => {
-          const Icon = item.icon;
-          const selected = item.id === active;
+      <nav aria-label="Studio sections" className="flex flex-1 flex-col gap-0.5 px-2 py-3">
+        <p className="px-2.5 pb-2 text-[10px] font-medium uppercase tracking-[0.12em] text-subtle">
+          Workspace
+        </p>
+        {ITEMS.map(({ id, label, icon: Icon }) => {
+          const selected = id === active;
           return (
             <button
-              key={item.id}
+              key={id}
               type="button"
               aria-current={selected ? "page" : undefined}
-              onClick={() => onSelect(item.id)}
+              onClick={() => onSelect(id)}
               className={cn(
-                "relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px]",
-                "text-muted-foreground transition-colors duration-150",
-                "hover:bg-accent hover:text-accent-foreground",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0",
-                "disabled:cursor-not-allowed disabled:opacity-50",
+                "flex items-center gap-2.5 rounded-sm px-2.5 py-[7px] text-left text-[12px] transition-colors duration-150",
+                "text-muted-foreground hover:bg-accent hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 selected && "bg-accent font-medium text-foreground",
               )}
             >
-              {selected ? (
-                <motion.span
-                  layoutId="sidebar-active"
-                  transition={{ duration: MOTION.standard, ease: "easeOut" }}
-                  className="absolute top-1/2 left-0 h-4 w-[3px] -translate-y-1/2 rounded-full bg-primary"
-                />
-              ) : null}
               <Icon className="size-4 shrink-0" aria-hidden />
-              {item.label}
+              {label}
             </button>
           );
         })}
       </nav>
       <Separator />
-      <div className="flex items-center justify-between px-4 py-2.5">
-        <span className="text-[11px] text-subtle">Offline engine</span>
-        <span className="font-mono text-[11px] text-subtle">v1.0.0</span>
+      <div className="flex items-center justify-between px-3.5 py-2.5">
+        <span className="text-[10px] text-subtle">Local workspace</span>
+        <span className="font-mono text-[10px] text-subtle">1.0.0</span>
       </div>
     </aside>
   );

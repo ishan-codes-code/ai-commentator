@@ -6,11 +6,14 @@ export function registerProjectMediaProtocol({ protocol, net, pathToFileURL, app
     try {
       const url = new URL(request.url);
       const segments = url.pathname.split('/').filter(Boolean);
-      // project://<id>/frames/<name> or project://<id>/audio/<scope>/<name>
+      // Project media is allowlisted by type and resolved in the main process.
       const [kind, ...rest] = segments;
       let scope = null;
       let name = null;
-      if (kind === 'frames' && rest.length === 1) {
+      if (kind === 'source' && rest.length === 1) {
+        scope = 'source';
+        [name] = rest;
+      } else if (kind === 'frames' && rest.length === 1) {
         scope = 'frames';
         [name] = rest;
       } else if (kind === 'audio' && rest.length === 2) {

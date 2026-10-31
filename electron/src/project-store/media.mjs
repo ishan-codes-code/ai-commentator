@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getProjectsRoot, resolveProjectDir } from './metadata.mjs';
+import { getProject, getProjectsRoot, resolveProjectDir } from './metadata.mjs';
 
 function projectSubdir(projectDir, ...parts) {
   const resolved = path.join(projectDir, ...parts);
@@ -17,6 +17,7 @@ const MEDIA_SCOPES = {
     extensions: new Set(['.mp3', '.wav', '.ogg', '.m4a']),
   },
 };
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.avi', '.mov', '.mkv', '.webm']);
 
 /**
  * Resolve one media file for the `project://` protocol handler: returns
@@ -25,16 +26,18 @@ const MEDIA_SCOPES = {
  * deviation throws; the caller maps failures to 404 without detail.
  */
 export function resolveProjectMedia(userDataPath, projectId, scope, name) {
+  const isSource = scope === 'source';
   const media = Object.prototype.hasOwnProperty.call(MEDIA_SCOPES, scope)
     ? MEDIA_SCOPES[scope]
     : null;
-  if (!media) {
+  if (!media && !isSource) {
     throw new Error('Unsupported media scope.');
   }
   if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(name)) {
     throw new Error('Invalid media name.');
   }
-  if (name.startsWith('.') || !media.extensions.has(path.extname(name).toLowerCase())) {
+  const extensions = isSource ? VIDEO_EXTENSIONS : media.extensions;
+  if (name.startsWith('.') || !extensions.has(path.extname(name).toLowerCase())) {
     throw new Error('Unsupported media type.');
   }
   const root = getProjectsRoot(userDataPath);
@@ -42,7 +45,36 @@ export function resolveProjectMedia(userDataPath, projectId, scope, name) {
   if (!fs.existsSync(path.join(dir, 'project.json'))) {
     throw new Error('Project not found.');
   }
-  const filePath = projectSubdir(dir, ...media.dir, name);
+  let filePath;
+  if (isSource) {
+    const project = getProject(userDataPath, projectId);
+    const sourceDir = path.join(dir, 'source');
+    filePath = projectSubdir(dir, 'source', name);
+    if (path.resolve(project.sourceVideo.path) !== path.resolve(filePath)) {
+      throw new Error('Media not found.');
+    }
+    let realProjectsRoot;
+    let realProjectDir;
+    let realSourceDir;
+    let realFilePath;
+    try {
+      realProjectsRoot = fs.realpathSync(root);
+      realProjectDir = fs.realpathSync(dir);
+      realSourceDir = fs.realpathSync(sourceDir);
+      realFilePath = fs.realpathSync(filePath);
+    } catch {
+      throw new Error('Media not found.');
+    }
+    if (
+      path.dirname(realProjectDir) !== realProjectsRoot ||
+      realSourceDir !== path.join(realProjectDir, 'source') ||
+      path.dirname(realFilePath) !== realSourceDir
+    ) {
+      throw new Error('Media not found.');
+    }
+  } else {
+    filePath = projectSubdir(dir, ...media.dir, name);
+  }
   let stat = null;
   try {
     stat = fs.statSync(filePath);
