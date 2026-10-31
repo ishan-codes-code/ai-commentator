@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button.jsx";
 import { Spinner } from "@/components/ui/spinner.jsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.jsx";
 import GlassCard from "@/primitives/GlassCard.jsx";
+import { cn } from "cn";
 import { projectMediaUrl } from "@/lib/format.js";
 
 function RawJson({ data }) {
@@ -380,7 +381,7 @@ function CommentaryTab({ commentary, readCommentary }) {
  * main-process listing/reads of the project's own output tree; absent
  * artifacts render honest empty states, never placeholders.
  */
-export default function ArtifactBrowser({ projectId, refreshSignal }) {
+export default function ArtifactBrowser({ projectId, refreshSignal, className }) {
   const [listing, setListing] = useState(null);
   const [docs, setDocs] = useState({});
   const [loading, setLoading] = useState(true);
@@ -437,7 +438,7 @@ export default function ArtifactBrowser({ projectId, refreshSignal }) {
 
   if (loading && !listing) {
     return (
-      <GlassCard className="flex items-center gap-2 p-5 text-[13px] text-muted-foreground">
+      <GlassCard className={cn("flex items-center gap-2 p-5 text-[13px] text-muted-foreground", className)}>
         <Spinner />
         Loading artifacts…
       </GlassCard>
@@ -446,7 +447,7 @@ export default function ArtifactBrowser({ projectId, refreshSignal }) {
 
   if (error || !listing) {
     return (
-      <div className="flex flex-col gap-2">
+      <div className={cn("flex flex-col gap-2", className)}>
         <Alert variant="destructive">
           <AlertTitle>Could not load artifacts</AlertTitle>
           <AlertDescription>{error ?? "Unknown error."}</AlertDescription>
@@ -463,15 +464,15 @@ export default function ArtifactBrowser({ projectId, refreshSignal }) {
   }
 
   return (
-    <GlassCard className="flex flex-col gap-3 p-5">
+    <GlassCard className={cn("flex min-h-full flex-col gap-3 p-4", className)}>
       <div className="flex items-center gap-2">
         <Film className="size-4 text-muted-foreground" aria-hidden />
         <h2 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground">
           Artifacts
         </h2>
       </div>
-      <Tabs defaultValue="frames">
-        <TabsList aria-label="Artifact categories">
+      <Tabs defaultValue="frames" className="min-h-0 flex-1">
+        <TabsList aria-label="Artifact categories" className="w-full shrink-0 overflow-x-auto">
           <TabsTrigger value="frames">
             Frames{listing.frames.count > 0 ? ` ${listing.frames.count}` : ""}
           </TabsTrigger>
@@ -486,19 +487,19 @@ export default function ArtifactBrowser({ projectId, refreshSignal }) {
             Commentary{listing.commentary.lines > 0 ? ` ${listing.commentary.lines}` : ""}
           </TabsTrigger>
         </TabsList>
-        <TabsContent value="frames">
+        <TabsContent value="frames" className="min-h-0 flex-1 overflow-y-auto">
           <FramesTab projectId={projectId} frames={listing.frames} />
         </TabsContent>
-        <TabsContent value="observations">
+        <TabsContent value="observations" className="min-h-0 flex-1 overflow-y-auto">
           <ObservationsTab projectId={projectId} observations={listing.observations} />
         </TabsContent>
-        <TabsContent value="state">
+        <TabsContent value="state" className="min-h-0 flex-1 overflow-y-auto">
           <StateTab state={listing.state} readState={docs.state} />
         </TabsContent>
-        <TabsContent value="events">
+        <TabsContent value="events" className="min-h-0 flex-1 overflow-y-auto">
           <EventsTab events={listing.events} readEvents={docs.events} />
         </TabsContent>
-        <TabsContent value="commentary">
+        <TabsContent value="commentary" className="min-h-0 flex-1 overflow-y-auto">
           <CommentaryTab commentary={listing.commentary} readCommentary={docs.commentary} />
         </TabsContent>
       </Tabs>

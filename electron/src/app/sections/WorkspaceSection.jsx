@@ -1,61 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Mic, Play, Sparkles, Volume2 } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert.jsx";
-import { Badge } from "@/components/ui/badge.jsx";
 import { Button } from "@/components/ui/button.jsx";
-import { Separator } from "@/components/ui/separator.jsx";
 import { Spinner } from "@/components/ui/spinner.jsx";
-import GlassCard from "@/primitives/GlassCard.jsx";
-import StatusIndicator from "@/primitives/StatusIndicator.jsx";
-import ArtifactBrowser from "@/components/ArtifactBrowser.jsx";
-import RunPanel from "@/components/RunPanel.jsx";
 import {
   applyWorkerMessage,
   createInitialRunState,
 } from "@/lib/worker-view.js";
-import {
-  extensionOf,
-  fileNameOf,
-  fileUrlOf,
-  formatBytes,
-} from "@/lib/format.js";
-import {
-  RUN_MODES,
-  VISION_FRAME_LIMIT,
-  buildProcessOptions,
-  defaultRunMode,
-  isAiMode,
-} from "@/lib/run-options.js";
-
-const STATUS_LABELS = {
-  idle: "Idle",
-  processing: "Processing",
-  done: "Done",
-  error: "Error",
-  cancelled: "Cancelled",
-  interrupted: "Interrupted",
-};
-
-const STATUS_BADGE = {
-  idle: "outline",
-  processing: "default",
-  done: "secondary",
-  error: "destructive",
-  cancelled: "outline",
-  interrupted: "outline",
-};
-
-function AudioLane({ icon: Icon, title, children }) {
-  return (
-    <GlassCard className="flex flex-col gap-1.5 p-4">
-      <div className="flex items-center gap-2">
-        <Icon className="size-4 text-muted-foreground" aria-hidden />
-        <h3 className="text-[13px] font-medium text-foreground">{title}</h3>
-      </div>
-      {children}
-    </GlassCard>
-  );
-}
+import { RUN_MODES, buildProcessOptions, defaultRunMode } from "@/lib/run-options.js";
+import EditorCenter from "./workspace/EditorCenter.jsx";
+import ProcessingInspector from "./workspace/ProcessingInspector.jsx";
+import ProjectWorkspaceLayout from "./workspace/ProjectWorkspaceLayout.jsx";
 
 /**
  * Dedicated workspace for one opened project. The source video lives in
@@ -63,11 +18,10 @@ function AudioLane({ icon: Icon, title, children }) {
  * runs project-bound so artifacts can never leak across projects.
  * Audio lanes are honest empty states until extraction/TTS land.
  */
-export default function WorkspaceSection({ projectId, onBack }) {
+export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLoaded, onBack }) {
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [previewFailed, setPreviewFailed] = useState(false);
   const [run, setRun] = useState(() => createInitialRunState());
   const [runMode, setRunMode] = useState(RUN_MODES.OFFLINE);
   const [visionConfigured, setVisionConfigured] = useState(false);
@@ -91,6 +45,7 @@ export default function WorkspaceSection({ projectId, onBack }) {
         }
         if (alive) {
           setProject(res.project);
+          onProjectLoaded?.(res.project);
           setRun((prev) =>
             res.project.processingStatus === "processing"
               ? { ...prev, status: "processing", settled: false }
@@ -142,7 +97,7 @@ export default function WorkspaceSection({ projectId, onBack }) {
         unsubscribe();
       }
     };
-  }, [projectId]);
+  }, [projectId, onProjectLoaded]);
 
   useEffect(() => {
     if (
@@ -158,9 +113,16 @@ export default function WorkspaceSection({ projectId, onBack }) {
             : run.status === "failed"
               ? "error"
               : "cancelled";
-        window.api
-          .updateProject(project.id, { processingStatus: terminal })
-          .catch(() => {});
+        if (project.processingStatus !== terminal) {
+          window.api
+            .updateProject(project.id, { processingStatus: terminal })
+            .catch(() => {});
+          setProject((current) =>
+            current?.id === project.id
+              ? { ...current, processingStatus: terminal }
+              : current,
+          );
+        }
       }
     }
   }, [run.status, project]);
@@ -198,6 +160,7 @@ export default function WorkspaceSection({ projectId, onBack }) {
         window.api
           .updateProject(project.id, { processingStatus: "processing" })
           .catch(() => {});
+        setProject((current) => ({ ...current, processingStatus: "processing" }));
       }
     } catch (err) {
       if (mountedRef.current) {
@@ -234,226 +197,52 @@ export default function WorkspaceSection({ projectId, onBack }) {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex flex-col gap-4">
-        <GlassCard className="flex items-center gap-2 p-5 text-[13px] text-muted-foreground">
-          <Spinner />
-          Opening project…
-        </GlassCard>
-      </div>
-    );
-  }
+  const mainContent = loading ? (
+    <div className="flex h-full min-h-0 items-center justify-center gap-2 text-[13px] text-muted-foreground">
+      <Spinner />
+      Opening project…
+    </div>
+  ) : error || !project ? (
+    <div className="flex h-full min-h-0 flex-col items-start justify-center gap-3 p-5">
+      <Button type="button" variant="ghost" onClick={onBack}>
+        <ArrowLeft data-icon="inline-start" />
+        Projects
+      </Button>
+      <Alert variant="destructive">
+        <AlertTitle>Could not open the project</AlertTitle>
+        <AlertDescription>{error ?? "Project not found."}</AlertDescription>
+      </Alert>
+    </div>
+  ) : (
+    <EditorCenter project={project} refreshSignal={run.status} onBack={onBack} />
+  );
 
-  if (error || !project) {
-    return (
-      <div className="flex flex-col gap-4">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onBack}
-          className="self-start"
-        >
-          <ArrowLeft data-icon="inline-start" />
-          Projects
-        </Button>
-        <Alert variant="destructive">
-          <AlertTitle>Could not open the project</AlertTitle>
-          <AlertDescription>{error ?? "Project not found."}</AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-
-  const fileUrl = fileUrlOf(project.sourceVideo.path);
-  // `file://` media loads only from a `file:` origin (packaged app).
-  // Under the dev server the attempt is rejected, so go straight to
-  // the honest fallback instead of logging a console error.
-  const canPreviewFiles =
-    typeof window !== "undefined" && window.location.protocol === "file:";
-  const indicatorStatus =
-    run.status === "completed"
-      ? "done"
-      : run.status === "failed"
-        ? "error"
-        : run.status;
+  const inspectorContent = project ? (
+    <ProcessingInspector
+      project={project}
+      run={run}
+      runMode={runMode}
+      setRunMode={setRunMode}
+      visionConfigured={visionConfigured}
+      visionChecked={visionChecked}
+      canStart={canStart}
+      starting={starting}
+      cancelling={cancelling}
+      cancelError={cancelError}
+      onStart={handleStart}
+      onCancel={handleCancel}
+    />
+  ) : (
+    <div className="flex h-full items-center justify-center px-4 text-[12px] text-muted-foreground">
+      {loading ? "Loading project inspector…" : "Project details unavailable"}
+    </div>
+  );
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={onBack}
-          aria-label="Back to projects"
-        >
-          <ArrowLeft data-icon="inline-start" />
-          Projects
-        </Button>
-        <Separator orientation="vertical" className="h-4" />
-        <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-[-0.01em] text-foreground">
-          {project.name}
-        </h2>
-        <Badge variant={STATUS_BADGE[run.status] ?? "outline"}>
-          {STATUS_LABELS[run.status] ?? run.status}
-        </Badge>
-      </div>
-
-      <GlassCard className="flex flex-col gap-3 p-5">
-        {fileUrl && !previewFailed && canPreviewFiles ? (
-          <video
-            key={project.sourceVideo.path}
-            src={fileUrl}
-            controls
-            preload="metadata"
-            aria-label={`${project.name} gameplay preview`}
-            onError={() => setPreviewFailed(true)}
-            className="aspect-video w-full rounded-card border border-border bg-background"
-          >
-            <track kind="captions" />
-            Preview unavailable for this file.
-          </video>
-        ) : (
-          <div className="flex flex-col items-center gap-2 rounded-card border border-border bg-background px-4 py-8 text-center">
-            <p className="text-[13px] font-medium text-foreground">
-              Preview unavailable for this file
-            </p>
-            <p className="max-w-sm text-xs text-muted-foreground">
-              The desktop shell could not decode this video for preview.
-              Processing uses the Python engine and is unaffected.
-            </p>
-          </div>
-        )}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-            {fileNameOf(project.sourceVideo.path)} ·{" "}
-            {formatBytes(project.sourceVideo.sizeBytes)} · .
-            {extensionOf(project.sourceVideo.path)}
-          </span>
-          <StatusIndicator
-            status={indicatorStatus}
-            label={STATUS_LABELS[run.status] ?? run.status}
-          />
-        </div>
-        <div
-          className="flex flex-col gap-2"
-          role="group"
-          aria-label="Processing mode"
-        >
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant={isAiMode(runMode) ? "default" : "outline"}
-              disabled={!canStart || !visionConfigured}
-              onClick={() => setRunMode(RUN_MODES.AI)}
-              aria-pressed={isAiMode(runMode)}
-              title={
-                visionConfigured
-                  ? `Analyze up to ${VISION_FRAME_LIMIT} frames with AI`
-                  : "AI analysis needs a Baseten API key"
-              }
-            >
-              <Sparkles data-icon="inline-start" />
-              AI analysis
-            </Button>
-            <Button
-              type="button"
-              variant={isAiMode(runMode) ? "outline" : "default"}
-              disabled={!canStart}
-              onClick={() => setRunMode(RUN_MODES.OFFLINE)}
-              aria-pressed={!isAiMode(runMode)}
-            >
-              Offline extraction
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {isAiMode(runMode)
-              ? `Analyzes up to ${VISION_FRAME_LIMIT} selected frames with the Baseten vision model (paid). Validated observations already on disk are reused.`
-              : visionChecked && !visionConfigured
-                ? "Offline-safe: vision analysis is skipped, so no API key is needed and no paid calls are made. Set BASETEN_API_KEY and restart to unlock AI analysis."
-                : "Offline-safe: vision analysis is skipped, so no API key is needed and no paid calls are made."}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="default"
-            disabled={!canStart}
-            onClick={handleStart}
-          >
-            {starting ? (
-              <>
-                <Spinner data-icon="inline-start" />
-                Starting…
-              </>
-            ) : (
-              <>
-                <Play data-icon="inline-start" />
-                Process
-              </>
-            )}
-          </Button>
-          {processing ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={cancelling}
-              onClick={handleCancel}
-            >
-              {cancelling ? (
-                <>
-                  <Spinner data-icon="inline-start" />
-                  Cancelling…
-                </>
-              ) : (
-                "Cancel processing"
-              )}
-            </Button>
-          ) : null}
-        </div>
-        {project.processingStatus === "interrupted" &&
-        run.status === "idle" ? (
-          <Alert variant="default">
-            <AlertTitle>Previous run was interrupted</AlertTitle>
-            <AlertDescription>
-              The application closed while this project was processing.
-              Nothing was marked complete — start a new run when ready.
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        <p className="text-xs text-muted-foreground">
-          Output stays inside this project.
-        </p>
-      </GlassCard>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <AudioLane icon={Volume2} title="Original game audio">
-          <p className="text-xs text-muted-foreground">
-            Audio extraction is not implemented yet — this lane will carry
-            the gameplay soundtrack.
-          </p>
-        </AudioLane>
-        <AudioLane icon={Mic} title="AI commentary">
-          <p className="text-xs text-muted-foreground">
-            Text-to-speech is not implemented yet — generated commentary
-            will play here.
-          </p>
-        </AudioLane>
-      </div>
-
-      {run.status !== "idle" ? (
-        <RunPanel
-          run={run}
-          cancelling={cancelling}
-          cancelError={cancelError}
-          onCancel={handleCancel}
-          onRetry={handleStart}
-          onChooseDifferent={onBack}
-          chooseDifferentLabel="Back to projects"
-        />
-      ) : null}
-
-      <ArtifactBrowser projectId={project.id} refreshSignal={run.status} />
-    </div>
+    <ProjectWorkspaceLayout
+      main={mainContent}
+      inspector={inspectorContent}
+      inspectorOpen={inspectorOpen}
+    />
   );
 }

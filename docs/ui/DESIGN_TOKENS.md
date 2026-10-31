@@ -12,22 +12,20 @@ Implementation: CSS custom properties + Tailwind CSS v4 `@theme` in
 
 | Token name      | Value                    | Role                              |
 | --------------- | ------------------------ | --------------------------------- |
-| `studio-950`    | `#030304`                | Application canvas                |
-| `studio-900`    | `#08080A`                | Primary surface                   |
-| `studio-850`    | `#0C0C10`                | Raised surface                    |
-| `studio-800`    | `#121218`                | Elevated surface                  |
-| `violet`        | `#9670FF`                | Primary accent (restrained)       |
-| `ice`           | `#38BDF8`                | Secondary / technical signal      |
+| `studio-950`    | `#09090A`                | Application canvas                |
+| `studio-900`    | `#101011`                | Primary surface                   |
+| `studio-850`    | `#171718`                | Raised surface                    |
+| `studio-800`    | `#202021`                | Elevated surface                  |
 | `success`       | `#22C55E`                | Success status                    |
 | `warning`       | `#F59E0B`                | Warning status                    |
 | `danger`        | `#EF4444`                | Danger status                     |
-| `ink`           | `#F5F5F7`                | Primary text                      |
-| `ink-muted`     | `#92929D`                | Secondary text                    |
-| `ink-subtle`    | `#686873`                | Metadata only (never body copy)   |
-| `line`          | `#1C1C24`                | Solid hairline border             |
+| `ink`           | `#F1F1F1`                | Primary text                      |
+| `ink-muted`     | `#A1A1A4`                | Secondary text                    |
+| `ink-subtle`    | `#77777B`                | Metadata                          |
+| `line`          | `#2A2A2B`                | Solid hairline border             |
 
-Glass (overlays only): fill `rgba(12,12,16,0.82)`, border `#262630`,
-blur ≈ 16px.
+Overlay fill `rgba(23,23,24,0.96)`, border `#303031`; blur is not used
+for layout surfaces.
 
 ## Semantic mapping
 
@@ -37,14 +35,14 @@ blur ≈ 16px.
 | `foreground`          | `text-foreground`         | `ink`                     |
 | `card` / `card-fore.` | `bg-card` / `text-card…`  | `studio-900` / ink        |
 | `popover`             | `bg-popover`              | `studio-850`              |
-| `primary`             | `bg-primary`              | `violet`                  |
-| `primary-foreground`  | `text-primary-foreground` | `ink`                     |
-| `secondary`           | `text-secondary` (signal) | `ice`                     |
+| `primary`             | `bg-primary`              | `#EDEDED` (monochrome action) |
+| `primary-foreground`  | `text-primary-foreground` | `#111112`                     |
+| `secondary`           | `bg-secondary`            | Neutral raised surface        |
 | `muted`               | `bg-muted` / `text-muted…`| `studio-800` / ink-muted  |
 | `subtle`              | `text-subtle`             | `ink-subtle` (metadata)   |
 | `accent`              | `bg-accent`               | `studio-800`              |
 | `border` / `input`    | `border-border`           | `line` (solid)            |
-| `ring`                | `focus-visible:ring-ring` | `violet`                  |
+| `ring`                | `focus-visible:ring-ring` | `#B9B9BB`                  |
 | `success` / `warning` / `destructive` | status only | palette            |
 | `surface`             | `bg-surface`              | `studio-900` (sidebar)    |
 | `surface-raised`      | `bg-surface-raised`       | `studio-850` (panels)     |
@@ -60,10 +58,10 @@ Base unit **4px** (Tailwind default scale). Named applications:
 
 | Use                 | Token / class | Value |
 | ------------------- | ------------- | ----- |
-| View padding        | `px-6 py-6`   | 24px  |
-| Header height       | `h-12`        | 48px  |
-| Sidebar width       | `w-60`        | 240px |
-| Card padding (std)  | `p-5`         | 20px  |
+| View padding        | `px-5 py-4`   | 20/16px |
+| Header height       | `h-11`        | 44px  |
+| Sidebar width       | `w-[196px]`   | 196px |
+| Card padding (std)  | `p-4`         | 16px  |
 | Control gaps        | `gap-2`/`gap-4` | 8/16px |
 
 Use the scale (`gap-*`, `p-*`), never ad-hoc pixel values.
@@ -72,10 +70,10 @@ Use the scale (`gap-*`, `p-*`), never ad-hoc pixel values.
 
 | Surface          | Token / class    | Value |
 | ---------------- | ---------------- | ----- |
-| Base (`--radius`)| `rounded-md`     | 8px   |
-| Cards            | `rounded-card`   | 10px  |
-| Panels           | `rounded-panel`  | 12px  |
-| Dialogs          | `rounded-dialog` | 14px  |
+| Base (`--radius`)| `rounded-md`     | 6px   |
+| Cards            | `rounded-card`   | 8px   |
+| Panels           | `rounded-panel`  | 10px  |
+| Dialogs          | `rounded-dialog` | 12px  |
 
 One radius per surface rank; 8px is the control default.
 
@@ -96,8 +94,8 @@ Body default is 13px/1.5; headings use `leading-tight`.
 
 - Shadows are near-invisible structure (`shadow-panel`: 1px, 50% black;
   `shadow-overlay` for modals only), never colored.
-- Glass blur (`backdrop-blur-glass` ≈ 16px) is reserved for dialogs and
-  popovers. Layout never blurs.
+- Any future overlay blur must remain static and limited to dialogs and
+  popovers; layout never blurs.
 - Motion durations: `motion-fast` 150ms, `motion-standard` 250ms,
   `motion-page` 350ms, `motion-slow` 400ms. Section transitions are
   opacity-only. See [MOTION_GUIDELINES.md](MOTION_GUIDELINES.md).
