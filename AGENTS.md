@@ -111,6 +111,31 @@ Read this file and the relevant `docs/` pages before implementing any task.
 - Do not change the model ID (`meta-models/muse-spark-open-1026`) outside
   an explicit application task.
 
+## UI development (renderer)
+
+- Before renderer work, read the relevant `docs/ui/` documents
+  (`DESIGN_SYSTEM.md`, `DESIGN_TOKENS.md`, `UI_ARCHITECTURE.md`,
+  `COMPONENT_GUIDELINES.md`, `MOTION_GUIDELINES.md`, `UI_ROADMAP.md`).
+  Do not assume they are auto-loaded.
+- Follow the Obsidian AI tokens in `electron/src/index.css`; use
+  semantic utilities, never hardcoded colors. Keep tokens, docs, and
+  CSS synchronized when a durable design decision changes.
+- Use the installed skills where relevant: shadcn
+  (`electron/.agents/skills/shadcn`) for component composition and
+  Motion (`electron/.agents/skills/motion`) for animation. Respect
+  `.agents/` and `electron/.agents/`; never duplicate or relocate
+  installed skills.
+- Compose shadcn primitives and project `primitives/` before writing
+  custom markup; do not create one-off duplicates of existing surfaces.
+- Motion via `motion/react` only, with `MotionConfig
+  reducedMotion="user"` at the root; restrained, cheap properties only.
+- This task is renderer-only apart from safe frontend config and
+  documentation: never modify the Python engine, `python/worker.py`,
+  the NDJSON protocol, `main.js`, `preload.js`,
+  `worker-protocol.mjs`, `python-worker.mjs`, security settings, or
+  the model identifier. The renderer uses only `window.api`
+  (`processVideo`, `cancelProcessing`, `onWorkerEvent`).
+
 ## Task completion
 
 At the end of every coding task, report:

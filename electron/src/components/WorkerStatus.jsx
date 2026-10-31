@@ -1,4 +1,20 @@
 import { useEffect, useState } from 'react';
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card.jsx';
+import StatusIndicator from '@/primitives/StatusIndicator.jsx';
+
+const LABELS = {
+  idle: 'Idle',
+  processing: 'Processing',
+  done: 'Done',
+  error: 'Error',
+  cancelled: 'Cancelled',
+};
 
 export default function WorkerStatus() {
   const [status, setStatus] = useState('idle');
@@ -44,9 +60,18 @@ export default function WorkerStatus() {
   }, []);
 
   return (
-    <section>
-      <h2>Worker status: {status}</h2>
-      <p>{detail}</p>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium">Worker</CardTitle>
+        <CardAction>
+          <StatusIndicator status={status} label={LABELS[status] ?? status} />
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <p className="truncate font-mono text-xs text-muted-foreground">
+          {detail}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
