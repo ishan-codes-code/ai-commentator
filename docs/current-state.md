@@ -16,7 +16,9 @@ dark, constrained stage. It reports available playback time, duration, source
 dimensions, and playback status, with separate empty, loading, and playback
 error states. Seeking beyond buffered video content can still fail; that media
 protocol limitation remains unresolved. Prompt inspection and standalone audio
-playback remain placeholders.
+playback remain placeholders. The right inspector separates Processing,
+Configure, and Project information into fixed-header tabs with independently
+scrolling content; processing details remain driven by the worker view state.
 The UI palette is monochromatic with semantic status accents. Window size and
 lifecycle are unchanged. No Python engine or worker protocol behavior changed.
 
