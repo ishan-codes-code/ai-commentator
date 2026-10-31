@@ -11,7 +11,12 @@ playback lanes at a fixed height. Processing actions/status and source details
 remain project-scoped; artifact browsing stays project-scoped. Project source
 preview uses the main-process `project://` protocol under both development
 and packaged origins; it only serves the source filename recorded in project
-metadata. Prompt inspection and standalone audio playback remain placeholders.
+metadata. The preview keeps native video controls and contains the source in a
+dark, constrained stage. It reports available playback time, duration, source
+dimensions, and playback status, with separate empty, loading, and playback
+error states. Seeking beyond buffered video content can still fail; that media
+protocol limitation remains unresolved. Prompt inspection and standalone audio
+playback remain placeholders.
 The UI palette is monochromatic with semantic status accents. Window size and
 lifecycle are unchanged. No Python engine or worker protocol behavior changed.
 
