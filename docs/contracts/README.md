@@ -11,6 +11,11 @@ events → commentary → audio) must have explicit schemas.
 
 Defined contracts:
 
+- [worker-protocol.md](worker-protocol.md) — the Electron/Python
+  interface: how the main process launches `python/worker.py`, the
+  NDJSON message types, stage ordering, validation rules, exit codes,
+  and what is (and is not) reported as progress.
+
 - [observation-v1.md](observation-v1.md) — one validated vision-model
   observation of a single frame (roadmap milestones 2–3). Includes why
   server-side schema enforcement is unavailable for our model and why

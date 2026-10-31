@@ -2,9 +2,8 @@
 
 No live API calls and no fixture credentials: observations are small
 hand-built observation-v1 documents, and match state is built locally with
-build_match_state. Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+build_match_state. Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import contextlib
@@ -12,7 +11,9 @@ import io
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
 from main import (
     EVENT_RULES,

@@ -1,9 +1,8 @@
 """Offline tests for the rolling match-state tracker (match-state-v1).
 
 No live API calls and no fixture credentials: observations are small
-hand-built observation-v1 documents. Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+hand-built observation-v1 documents. Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import contextlib
@@ -11,7 +10,9 @@ import io
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 
 from main import (
     MATCH_STATE_SCHEMA_VERSION,

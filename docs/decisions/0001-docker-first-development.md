@@ -1,6 +1,8 @@
 # 0001 — Docker-first development
 
-- **Status:** accepted.
+- **Status:** superseded by
+  [0002-native-electron-python.md](0002-native-electron-python.md).
+  Kept as historical record; do not follow its Docker instructions.
 
 ## Context
 

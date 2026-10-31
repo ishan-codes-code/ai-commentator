@@ -2,9 +2,8 @@
 
 No live API calls: a fake writer client stands in for the Baseten
 OpenAI-compatible endpoint, and fixtures reuse the deterministic builders.
-Run inside Docker:
-    docker compose run --rm -v "$PWD/tests:/app/tests:ro" \\
-        commentator python -m unittest discover -s tests -v
+Run natively from the repository root:
+    .venv/bin/python -m unittest discover -s tests -v
 """
 
 import contextlib
@@ -16,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -673,7 +673,13 @@ class CliWriterTests(unittest.TestCase):
             env = dict(os.environ)
             env.pop("BASETEN_API_KEY", None)
             proc = subprocess.run(
-                [sys.executable, str(MAIN_PATH), "--commentary-write"],
+                [
+                    sys.executable,
+                    str(MAIN_PATH),
+                    "--commentary-write",
+                    "--output-dir",
+                    str(root / "output"),
+                ],
                 cwd=root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
