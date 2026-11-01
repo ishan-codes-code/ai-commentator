@@ -16,9 +16,24 @@ const MESSAGE_TYPES = new Set([
   'started',
   'progress',
   'stage_completed',
+  'adaptive_sample',
   'result',
+  'stopped',
   'error',
 ]);
+
+/**
+ * Stdin control-channel contract (M4.2-A): one newline-delimited JSON
+ * message per command, mirroring `CONTROL_PROTOCOL_VERSION` in
+ * `python/ai_commentator/vision/control.py`. Version 1 carries a single
+ * command, `stop`, which the worker routes to the adaptive StopToken.
+ * Nothing else may travel this channel: no paths, no shell, no code.
+ */
+const WORKER_CONTROL_VERSION = 1;
+
+function buildStopControlLine() {
+  return JSON.stringify({ type: 'stop', version: WORKER_CONTROL_VERSION }) + '\n';
+}
 
 /**
  * Incremental newline-delimited JSON parser. Chunk boundaries from the
@@ -100,11 +115,63 @@ function validateVideoInput(videoPath) {
   return null;
 }
 
+/**
+ * Adaptive progress contract (M4.2-B): one `adaptive_sample` message per
+ * validated, persisted iteration, emitted by `python/worker.py` from the
+ * engine's `on_iteration` hook. `ADAPTIVE_MAX_REASON_CHARS` mirrors the
+ * engine config; keep the two in sync.
+ */
+const ADAPTIVE_SPEEDS = new Set(['HIGH', 'NORMAL', 'LOW']);
+const ADAPTIVE_MAX_REASON_CHARS = 280;
+
+function isFiniteTimestamp(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isNonNegativeInt(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Strict shape check for `adaptive_sample` data. Anything outside the
+ * contract is rejected so the renderer can never render unvalidated
+ * model text as run progress.
+ */
+function isValidAdaptiveSample(message) {
+  if (!message || message.type !== 'adaptive_sample') {
+    return false;
+  }
+  const data = message.data;
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  if (!isFiniteTimestamp(data.timestamp)) {
+    return false;
+  }
+  if (!ADAPTIVE_SPEEDS.has(data.speed)) {
+    return false;
+  }
+  if (
+    typeof data.reason !== 'string' ||
+    data.reason.length > ADAPTIVE_MAX_REASON_CHARS
+  ) {
+    return false;
+  }
+  if (data.next_timestamp !== null && !isFiniteTimestamp(data.next_timestamp)) {
+    return false;
+  }
+  if (!isNonNegativeInt(data.observations) || !isNonNegativeInt(data.requests)) {
+    return false;
+  }
+  return true;
+}
+
 function isValidWorkerMessage(message) {
   return (
     message !== null &&
     typeof message === 'object' &&
-    MESSAGE_TYPES.has(message.type)
+    MESSAGE_TYPES.has(message.type) &&
+    (message.type !== 'adaptive_sample' || isValidAdaptiveSample(message))
   );
 }
 
@@ -163,6 +230,19 @@ function buildWorkerArgv(script, videoPath, opts = {}) {
   if (options.withScript) {
     argv.push('--with-script');
   }
+  if (options.adaptive) {
+    argv.push('--adaptive');
+  }
+  if (options.adaptiveMaxFrames !== undefined && options.adaptiveMaxFrames !== null) {
+    const maxFrames =
+      typeof options.adaptiveMaxFrames === 'number'
+        ? options.adaptiveMaxFrames
+        : Number(String(options.adaptiveMaxFrames).trim());
+    if (!Number.isInteger(maxFrames) || maxFrames < 1) {
+      throw new Error('adaptiveMaxFrames must be a positive integer.');
+    }
+    argv.push('--adaptive-max-frames', String(maxFrames));
+  }
   return argv;
 }
 
@@ -177,11 +257,14 @@ function resolveWorkerScript(repoRoot) {
 export {
   SUPPORTED_VIDEO_EXTENSIONS,
   MESSAGE_TYPES,
+  WORKER_CONTROL_VERSION,
+  buildStopControlLine,
   buildWorkerArgv,
   createLineParser,
   isVisionConfigured,
   validateVideoInput,
   isValidWorkerMessage,
+  isValidAdaptiveSample,
   resolvePythonExecutable,
   resolveWorkerScript,
 };

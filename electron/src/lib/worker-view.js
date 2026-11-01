@@ -2,7 +2,7 @@
  * Pure mapping from worker-protocol messages to run view state.
  *
  * The worker speaks NDJSON (`started`, `progress`, `stage_completed`,
- * `result`, `error`; see `docs/contracts/worker-protocol.md`) plus the
+ * `result`, `stopped`, `error`; see `docs/contracts/worker-protocol.md`) plus the
  * two renderer-synthesized messages (`worker-log`, `worker-exit`).
  * This module turns that stream into renderable state with no side
  * effects: no IPC, no timers, no mutation of its inputs.
@@ -11,6 +11,7 @@
 export const STAGE_ORDER = [
   'frame_extraction',
   'vision_analysis',
+  'adaptive_vision',
   'state_rebuild',
   'event_detection',
   'commentary',
@@ -20,6 +21,7 @@ export const STAGE_ORDER = [
 export const STAGE_LABELS = {
   frame_extraction: 'Frame extraction',
   vision_analysis: 'Vision analysis',
+  adaptive_vision: 'Adaptive vision',
   state_rebuild: 'Match-state reconstruction',
   event_detection: 'Event detection',
   commentary: 'Commentary generation',
@@ -47,6 +49,7 @@ const DETAIL_METRICS = [
   ['observations', 'observations'],
   ['events', 'events'],
   ['lines', 'lines'],
+  ['requests', 'requests'],
 ];
 
 /**
@@ -73,6 +76,15 @@ export function stageDetailText(detail) {
 
 export const MAX_WORKER_LOGS = 50;
 
+/**
+ * Maximum adaptive samples kept per run. Runs are bounded server-side
+ * (UI default 10, engine default 60), so this cap only guards against
+ * unbounded growth, never truncates a normal run.
+ */
+export const MAX_ADAPTIVE_SAMPLES = 500;
+
+export const ADAPTIVE_SPEEDS = ['HIGH', 'NORMAL', 'LOW'];
+
 export function createInitialRunState() {
   return {
     status: 'idle',
@@ -83,6 +95,11 @@ export function createInitialRunState() {
     result: null,
     error: null,
     workerLogs: [],
+    // Adaptive sampling decision history for the active run (null when
+    // the run is not adaptive). Reset by 'started', so samples can never
+    // leak from one run into the next; terminal messages keep it for
+    // post-run inspection.
+    adaptive: null,
     // True once the worker lifecycle for this run is over (worker-exit,
     // or a spawn failure that never produces a process). The UI only
     // allows a new run after the previous run has settled, so a late
@@ -145,6 +162,52 @@ export function applyWorkerMessage(state, message) {
         currentStage: null,
       };
     }
+    case 'adaptive_sample': {
+      // Progress only: one validated sample per persisted iteration.
+      // Kept verbatim (main already validated the shape) and bounded;
+      // samples survive terminal messages for post-run inspection.
+      const data = message.data;
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        typeof data.timestamp !== 'number' ||
+        !Number.isFinite(data.timestamp) ||
+        !ADAPTIVE_SPEEDS.includes(data.speed) ||
+        typeof data.reason !== 'string'
+      ) {
+        return state;
+      }
+      const sample = {
+        timestamp: data.timestamp,
+        speed: data.speed,
+        reason: data.reason,
+        next:
+          data.next_timestamp === null || data.next_timestamp === undefined
+            ? null
+            : data.next_timestamp,
+      };
+      const previous = state.adaptive;
+      const samples = [...(previous?.samples ?? []), sample].slice(
+        -MAX_ADAPTIVE_SAMPLES,
+      );
+      return {
+        ...state,
+        adaptive: {
+          samples,
+          observations: data.observations,
+          requests: data.requests,
+        },
+      };
+    }
+    case 'stopped': {
+      return {
+        ...state,
+        status: 'stopped',
+        currentStage: null,
+        result: message.data ?? null,
+        error: null,
+      };
+    }
     case 'result': {
       return {
         ...state,
@@ -176,7 +239,7 @@ export function applyWorkerMessage(state, message) {
       if (message.cancelled) {
         return { ...state, status: 'cancelled', currentStage: null, settled: true };
       }
-      if (state.status === 'completed' || state.status === 'failed') {
+      if (state.status === 'completed' || state.status === 'failed' || state.status === 'stopped') {
         return { ...state, settled: true };
       }
       return {

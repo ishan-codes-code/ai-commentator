@@ -8,6 +8,7 @@ const STYLES = {
   done: "bg-success",
   error: "bg-destructive",
   cancelled: "bg-warning",
+  stopped: "bg-warning",
   interrupted: "bg-warning",
 };
 

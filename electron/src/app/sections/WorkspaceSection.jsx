@@ -7,7 +7,7 @@ import {
   applyWorkerMessage,
   createInitialRunState,
 } from "@/lib/worker-view.js";
-import { RUN_MODES, buildProcessOptions, defaultRunMode } from "@/lib/run-options.js";
+import { ADAPTIVE_DEFAULT_MAX_FRAMES, RUN_MODES, buildProcessOptions, defaultRunMode, isAdaptiveMode } from "@/lib/run-options.js";
 import EditorCenter from "./workspace/EditorCenter.jsx";
 import ProcessingInspector from "./workspace/ProcessingInspector.jsx";
 import ProjectWorkspaceLayout from "./workspace/ProjectWorkspaceLayout.jsx";
@@ -29,6 +29,17 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState(null);
+  const [adaptiveMaxFrames, setAdaptiveMaxFrames] = useState(
+    ADAPTIVE_DEFAULT_MAX_FRAMES,
+  );
+  // True while a cooperative stop was accepted and the run is still
+  // alive. Set only after the main process confirms acceptance; the
+  // worker's terminal message clears it.
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState(null);
+  // Whether the active run is adaptive (captured at start so a later
+  // mode change cannot rewire a live run's controls).
+  const [runIsAdaptive, setRunIsAdaptive] = useState(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -103,16 +114,21 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
     if (
       run.status === "completed" ||
       run.status === "failed" ||
-      run.status === "cancelled"
+      run.status === "cancelled" ||
+      run.status === "stopped"
     ) {
       setCancelling(false);
+      setStopping(false);
+      setRunIsAdaptive(false);
       if (project && typeof window.api?.updateProject === "function") {
         const terminal =
           run.status === "completed"
             ? "done"
             : run.status === "failed"
               ? "error"
-              : "cancelled";
+              : run.status === "stopped"
+                ? "stopped"
+                : "cancelled";
         if (project.processingStatus !== terminal) {
           window.api
             .updateProject(project.id, { processingStatus: terminal })
@@ -135,10 +151,14 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
     if (!canStart) {
       return;
     }
+    const adaptive = isAdaptiveMode(runMode);
     setStarting(true);
     setCancelError(null);
+    setStopError(null);
+    setStopping(false);
+    setRunIsAdaptive(adaptive);
     try {
-      const runOptions = buildProcessOptions(runMode);
+      const runOptions = buildProcessOptions(runMode, { adaptiveMaxFrames });
       const res = await window.api.processVideo(project.sourceVideo.path, {
         projectId: project.id,
         ...runOptions,
@@ -197,6 +217,40 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
     }
   }
 
+  async function handleStop() {
+    if (stopping || run.status !== "processing" || !runIsAdaptive) {
+      return;
+    }
+    if (typeof window.api?.requestStop !== "function") {
+      setStopError("Cooperative stop is unavailable in this build.");
+      return;
+    }
+    setStopping(true);
+    setStopError(null);
+    try {
+      const res = await window.api.requestStop();
+      if (!mountedRef.current) {
+        return;
+      }
+      // Accepted means the control line reached the worker, not that the
+      // run has stopped: `stopping` stays true until the terminal
+      // `stopped` message lands. A rejection leaves the stopping state.
+      if (!res || res.ok !== true || res.requested !== true) {
+        setStopping(false);
+        setStopError(
+          res && res.reason
+            ? `Stop request was not accepted (${res.reason}).`
+            : "Stop request was not accepted.",
+        );
+      }
+    } catch (err) {
+      if (mountedRef.current) {
+        setStopping(false);
+        setStopError(err?.message ?? "Could not request stop.");
+      }
+    }
+  }
+
   const mainContent = loading ? (
     <div className="flex h-full min-h-0 items-center justify-center gap-2 text-[13px] text-muted-foreground">
       <Spinner />
@@ -229,8 +283,14 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
       starting={starting}
       cancelling={cancelling}
       cancelError={cancelError}
+      stopping={stopping}
+      stopError={stopError}
+      runIsAdaptive={runIsAdaptive}
+      adaptiveMaxFrames={adaptiveMaxFrames}
+      setAdaptiveMaxFrames={setAdaptiveMaxFrames}
       onStart={handleStart}
       onCancel={handleCancel}
+      onStop={handleStop}
     />
   ) : (
     <div className="flex h-full items-center justify-center px-4 text-[12px] text-muted-foreground">

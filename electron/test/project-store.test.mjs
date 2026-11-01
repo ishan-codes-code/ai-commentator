@@ -223,6 +223,24 @@ test('settle only transitions out of processing, never to success', (t) => {
   assert.throws(() => settleProjectRun(base, '../evil', 'error'), /Invalid project id/);
 });
 
+test('stopped settles a processing run as a terminal state', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const running = createProject(base, { name: 'Stopping', sourcePath: video });
+  updateProject(base, running.id, { processingStatus: 'processing' });
+
+  const settled = settleProjectRun(base, running.id, 'stopped');
+  assert.equal(settled.settled, true);
+  assert.equal(settled.project.processingStatus, 'stopped');
+  assert.equal(getProject(base, running.id).processingStatus, 'stopped');
+
+  // A stopped run is terminal: settling again changes nothing.
+  const repeat = settleProjectRun(base, running.id, 'done');
+  assert.equal(repeat.settled, false);
+  assert.equal(repeat.project.processingStatus, 'stopped');
+});
+
 test('reconcile moves only stale processing projects to interrupted', (t) => {
   const { base, cleanup } = makeUserData();
   t.after(cleanup);
@@ -364,4 +382,79 @@ test('media resolver confines access to listed project files', (t) => {
   assert.throws(() => resolveProjectMedia(base, created.id, 'frames', 'missing.jpg'), /Media not found/);
   assert.throws(() => resolveProjectMedia(base, '../evil', 'frames', 'frame_00003.jpg'), /Invalid project id/);
   assert.throws(() => resolveProjectMedia(base, 'no-such', 'frames', 'frame_00003.jpg'), /Project not found/);
+});
+
+test('artifact listing includes fractional adaptive observations and the manifest', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const created = createProject(base, { name: 'Adaptive', sourcePath: video });
+  const out = getProjectOutputDir(base, created.id);
+  const obsDir = path.join(out, 'observations');
+  fs.mkdirSync(obsDir, { recursive: true });
+  const obs = (timestamp) => ({
+    schema_version: 'observation-v1',
+    timestamp,
+    observations: [],
+    uncertainties: [],
+  });
+  fs.writeFileSync(path.join(obsDir, 'frame_00003.json'), JSON.stringify(obs(3)));
+  fs.writeFileSync(path.join(obsDir, 'frame_00000.5.json'), JSON.stringify(obs(0.5)));
+  fs.writeFileSync(path.join(obsDir, 'frame_00003.125.json'), JSON.stringify(obs(3.125)));
+  fs.writeFileSync(path.join(obsDir, 'match_state.json'), JSON.stringify({ ok: true }));
+  for (const bad of ['frame_.json', 'frame_abc.json', 'frame_1.2.3.json', 'frame_1.0000.json', 'frame_1..json']) {
+    fs.writeFileSync(path.join(obsDir, bad), '{}');
+  }
+  fs.writeFileSync(
+    path.join(obsDir, 'adaptive_run.json'),
+    JSON.stringify({
+      schema_version: 'adaptive-run-v1',
+      status: 'stopped',
+      termination: 'stop-requested',
+      observations: 3,
+      requests: 3,
+      iterations: [{ timestamp: 0, speed: 'HIGH', reason: 'Fast.' }],
+    }),
+  );
+
+  const listing = listArtifacts(base, created.id);
+  assert.equal(listing.observations.count, 3);
+  assert.deepEqual(
+    listing.observations.items.map((item) => item.name),
+    ['frame_00000.5.json', 'frame_00003.json', 'frame_00003.125.json'],
+  );
+  assert.deepEqual(
+    listing.observations.items.map((item) => item.timestamp),
+    [0.5, 3, 3.125],
+  );
+  assert.deepEqual(listing.manifest, { present: true, invalid: false });
+
+  const fractional = readArtifact(base, created.id, 'observation', 'frame_00000.5.json');
+  assert.equal(fractional.data.timestamp, 0.5);
+  assert.throws(
+    () => readArtifact(base, created.id, 'observation', 'frame_abc.json'),
+    /Invalid artifact name/,
+  );
+  assert.throws(
+    () => readArtifact(base, created.id, 'observation', 'frame_1.0000.json'),
+    /Invalid artifact name/,
+  );
+  const manifest = readArtifact(base, created.id, 'manifest');
+  assert.equal(manifest.kind, 'manifest');
+  assert.equal(manifest.data.status, 'stopped');
+  assert.equal(manifest.data.iterations[0].speed, 'HIGH');
+  assert.throws(
+    () => readArtifact(base, created.id, 'manifest', 'other.json'),
+    /Invalid artifact name/,
+  );
+});
+
+test('absent manifest reads as missing without breaking the listing', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const created = createProject(base, { name: 'Plain', sourcePath: video });
+  const listing = listArtifacts(base, created.id);
+  assert.deepEqual(listing.manifest, { present: false, invalid: false });
+  assert.equal(listing.observations.count, 0);
 });

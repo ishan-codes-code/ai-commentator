@@ -215,6 +215,111 @@ function ObservationsTab({ projectId, observations }) {
   );
 }
 
+function ManifestTab({ projectId, manifest, readManifest }) {
+  const [doc, setDoc] = useState(null);
+  const [docError, setDocError] = useState(null);
+  useEffect(() => {
+    setDoc(null);
+    setDocError(null);
+    if (!manifest.present || manifest.invalid) {
+      return;
+    }
+    let alive = true;
+    async function load() {
+      try {
+        const res = await window.api.readArtifact(projectId, "manifest");
+        if (!res || res.ok !== true) {
+          throw new Error(res?.error ?? "Could not read the run manifest.");
+        }
+        if (alive) {
+          setDoc(res.data);
+        }
+      } catch (err) {
+        if (alive) {
+          setDocError(err?.message ?? "Could not read the run manifest.");
+        }
+      }
+    }
+    load();
+    return () => {
+      alive = false;
+    };
+  }, [projectId, manifest.present, manifest.invalid]);
+  if (!manifest.present) {
+    return (
+      <p className="text-[13px] text-muted-foreground">
+        No adaptive run manifest yet. Adaptive sampling writes one per
+        validated iteration — stopped runs keep their partial manifest.
+      </p>
+    );
+  }
+  const data = doc ?? readManifest ?? null;
+  if (manifest.invalid || docError || !data) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Run manifest unreadable</AlertTitle>
+        <AlertDescription>
+          {docError ?? "The stored adaptive manifest failed validation."}
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  const iterations = Array.isArray(data.iterations) ? data.iterations : [];
+  const speeds = data.speed_counts ?? {};
+  return (
+    <div className="flex flex-col gap-2">
+      <dl className="flex flex-col gap-1.5">
+        <div className="flex items-baseline justify-between gap-4">
+          <dt className="text-[13px] text-muted-foreground">Status</dt>
+          <dd className="font-mono text-[13px] text-foreground">
+            {data.status ?? "—"}
+            {data.termination ? ` (${data.termination})` : ""}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4">
+          <dt className="text-[13px] text-muted-foreground">Observations</dt>
+          <dd className="font-mono text-[13px] text-foreground">
+            {data.observations ?? iterations.length}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4">
+          <dt className="text-[13px] text-muted-foreground">Vision requests</dt>
+          <dd className="font-mono text-[13px] text-foreground">
+            {data.requests ?? "—"}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-4">
+          <dt className="text-[13px] text-muted-foreground">Speed counts</dt>
+          <dd className="font-mono text-[13px] text-foreground">
+            HIGH {speeds.HIGH ?? 0} · NORMAL {speeds.NORMAL ?? 0} · LOW {speeds.LOW ?? 0}
+          </dd>
+        </div>
+      </dl>
+      {iterations.length > 0 ? (
+        <ul className="flex max-h-56 flex-col gap-1 overflow-y-auto" aria-label="Adaptive decision history">
+          {iterations.map((iteration, index) => (
+            <li
+              key={`${iteration.timestamp}-${index}`}
+              className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-[12px]"
+            >
+              <span className="shrink-0 font-mono tabular-nums text-muted-foreground">
+                {iteration.timestamp}s
+              </span>
+              <Badge variant={iteration.speed === "HIGH" ? "default" : iteration.speed === "NORMAL" ? "secondary" : "outline"}>
+                {iteration.speed ?? "?"}
+              </Badge>
+              <span className="min-w-0 flex-1 truncate text-foreground" title={iteration.reason || undefined}>
+                {iteration.reason || "No reason recorded."}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <RawJson data={data} />
+    </div>
+  );
+}
+
 function StateTab({ state, readState }) {
   if (!state.present) {
     return (
@@ -406,7 +511,7 @@ export default function ArtifactBrowser({ projectId, refreshSignal, className })
         }
         setListing(res.artifacts);
         const loaded = {};
-        for (const kind of ["state", "events", "commentary"]) {
+        for (const kind of ["manifest", "state", "events", "commentary"]) {
           const summary = res.artifacts[kind];
           if (summary?.present && !summary?.invalid) {
             try {
@@ -479,6 +584,9 @@ export default function ArtifactBrowser({ projectId, refreshSignal, className })
           <TabsTrigger value="observations">
             Observations{listing.observations.count > 0 ? ` ${listing.observations.count}` : ""}
           </TabsTrigger>
+          <TabsTrigger value="manifest">
+            Manifest
+          </TabsTrigger>
           <TabsTrigger value="state">Match state</TabsTrigger>
           <TabsTrigger value="events">
             Events{listing.events.count > 0 ? ` ${listing.events.count}` : ""}
@@ -492,6 +600,9 @@ export default function ArtifactBrowser({ projectId, refreshSignal, className })
         </TabsContent>
         <TabsContent value="observations" className="min-h-0 flex-1 overflow-y-auto">
           <ObservationsTab projectId={projectId} observations={listing.observations} />
+        </TabsContent>
+        <TabsContent value="manifest" className="min-h-0 flex-1 overflow-y-auto">
+          <ManifestTab projectId={projectId} manifest={listing.manifest} readManifest={docs.manifest} />
         </TabsContent>
         <TabsContent value="state" className="min-h-0 flex-1 overflow-y-auto">
           <StateTab state={listing.state} readState={docs.state} />

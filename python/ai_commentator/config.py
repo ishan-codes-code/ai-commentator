@@ -127,5 +127,45 @@ SCRIPT_WORD_NUMBERS = {
 DEFAULT_VISION_BATCH_LIMIT = 5
 DEFAULT_VISION_BATCH_JOBS = 1
 MAX_VISION_BATCH_JOBS = 4
+# Adaptive sampling (M4.1): one frame -> one vision request -> one speed
+# label -> next timestamp. The model chooses only the speed label; the
+# scheduler maps it to a configured interval. These defaults are initial
+# engineering values, not permanent product decisions: tune by editing
+# this dict, keeping every value within [ADAPTIVE_MIN_INTERVAL,
+# ADAPTIVE_MAX_INTERVAL] (validated by validate_intervals).
+ADAPTIVE_SPEEDS = ("HIGH", "NORMAL", "LOW")
+ADAPTIVE_DEFAULT_SPEED = "NORMAL"
+ADAPTIVE_INTERVALS = {"HIGH": 0.5, "NORMAL": 3.0, "LOW": 6.0}
+ADAPTIVE_MIN_INTERVAL = 0.1
+ADAPTIVE_MAX_INTERVAL = 60.0
+# Sampling reasons are untrusted descriptive text: bounded, never executed,
+# never used as a scheduler value.
+ADAPTIVE_MAX_REASON_CHARS = 280
+# Finite per-request timeout (seconds) for adaptive vision calls, passed
+# through the OpenAI-compatible SDK's timeout mechanism. No retries: one
+# sampled frame costs at most one paid request.
+ADAPTIVE_REQUEST_TIMEOUT_S = 60.0
+# Cost bound: an adaptive run stops after this many sampled frames.
+ADAPTIVE_DEFAULT_MAX_FRAMES = 60
+ADAPTIVE_HARD_MAX_FRAMES = 10000
+# Scheduled timestamps are quantized to millisecond precision so prompt
+# rendering, model echo comparison, and filenames stay exact.
+ADAPTIVE_TIMESTAMP_PRECISION = 3
+# Observation filenames stay ``frame_<seconds>.json``. Whole-second
+# timestamps keep the existing zero-padded integer form
+# (``frame_00003.json``); fractional timestamps use the trimmed-decimal
+# form (``frame_00000.5.json``). Integer names parse to int (unchanged);
+# fractional names parse to float.
+ADAPTIVE_OBSERVATION_FILENAME_RE = re.compile(r"^frame_(\d+(?:\.\d+)?)\.json$")
+# Run manifest: per-run adaptive metadata stored separately from the
+# observation contract (never mixed into observation-v1 documents).
+ADAPTIVE_RUN_MANIFEST_FILENAME = "adaptive_run.json"
+ADAPTIVE_RUN_SCHEMA_VERSION = "adaptive-run-v1"
+# Bounds for the supplementary previous-observation context included in
+# adaptive prompts: one previous observation only, never full history.
+ADAPTIVE_CONTEXT_MAX_OBSERVATIONS = 8
+ADAPTIVE_CONTEXT_MAX_FIELD_CHARS = 200
+ADAPTIVE_CONTEXT_MAX_UNCERTAINTIES = 4
+ADAPTIVE_CONTEXT_MAX_CHARS = 2000
 
 

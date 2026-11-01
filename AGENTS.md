@@ -72,9 +72,13 @@ Read this file and the relevant `docs/` pages before implementing any task.
   `exec()`); the Python interpreter resolves to the root `.venv`
   (Windows: `.venv/Scripts/python.exe`, Linux/macOS: `.venv/bin/python`).
 - The worker speaks newline-delimited JSON on **stdout only** —
-  `started`, `progress`, `stage_completed`, `result`, `error`
+  `started`, `progress`, `stage_completed`, `adaptive_sample`, `result`,
+  `stopped`, `error`
   (see `docs/contracts/worker-protocol.md`). Engine diagnostics go to
-  **stderr** so stdout stays parseable.
+  **stderr** so stdout stays parseable. **stdin** carries only the
+  versioned `stop` control line (`{"type":"stop","version":1}`), owned
+  by the process manager; the renderer only calls `requestStop` and
+  never touches the child.
 - Progress values are stage-level counts (`completed`/`total` stages),
   never fabricated frame percentages.
 - The worker reuses engine functions from `python/main.py`; do not
@@ -103,7 +107,7 @@ Read this file and the relevant `docs/` pages before implementing any task.
   appears on stdout or stderr.
 - Security boundaries: `nodeIntegration` stays disabled and
   `contextIsolation` stays enabled. `preload.js` exposes only
-  `processVideo`, `cancelProcessing`, `onWorkerEvent`, `selectVideo`,
+  `processVideo`, `cancelProcessing`, `requestStop`, `onWorkerEvent`, `selectVideo`,
   `visionStatus` (key-configured boolean only, never the key value),
   and the project IPC (`list-projects`, `create-project`, `open-project`,
   `update-project`, `delete-project`, `list-artifacts`, `read-artifact`) via

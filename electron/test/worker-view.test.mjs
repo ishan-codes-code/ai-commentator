@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  MAX_ADAPTIVE_SAMPLES,
   MAX_WORKER_LOGS,
   STAGE_LABELS,
   applyWorkerMessage,
@@ -15,12 +16,13 @@ import { extensionOf, fileNameOf, fileUrlOf, formatBytes, projectMediaUrl, timeA
 test('stageLabel maps known stages and passes unknown through', () => {
   assert.equal(stageLabel('frame_extraction'), 'Frame extraction');
   assert.equal(stageLabel('vision_analysis'), 'Vision analysis');
+  assert.equal(stageLabel('adaptive_vision'), 'Adaptive vision');
   assert.equal(stageLabel('state_rebuild'), 'Match-state reconstruction');
   assert.equal(stageLabel('event_detection'), 'Event detection');
   assert.equal(stageLabel('commentary'), 'Commentary generation');
   assert.equal(stageLabel('script'), 'Script generation');
   assert.equal(stageLabel('mystery_stage'), 'mystery_stage');
-  assert.equal(Object.keys(STAGE_LABELS).length, 6);
+  assert.equal(Object.keys(STAGE_LABELS).length, 7);
 });
 
 test('started resets to a fresh processing state', () => {
@@ -79,6 +81,53 @@ test('stage_completed records done and skipped honestly', () => {
   });
   assert.equal(state.stages.frame_extraction.status, 'done');
   assert.equal(state.stages.frame_extraction.detail.frames, 3);
+});
+
+test('stopped stores partial results without settling the run', () => {
+  const data = {
+    status: 'stopped',
+    termination: 'stop-requested',
+    observations: 2,
+    requests: 2,
+  };
+  const running = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'Processing clip.mp4',
+  });
+  const state = applyWorkerMessage(running, {
+    type: 'stopped',
+    data,
+  });
+  assert.equal(state.status, 'stopped');
+  assert.deepEqual(state.result, data);
+  assert.equal(state.error, null);
+  assert.equal(state.settled, false);
+  const exited = applyWorkerMessage(state, {
+    type: 'worker-exit',
+    code: 0,
+    cancelled: true,
+  });
+  assert.equal(exited.status, 'cancelled');
+  assert.equal(exited.settled, true);
+});
+
+test('worker-exit after stopped settles without rewriting the status', () => {
+  const running = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'Processing clip.mp4',
+  });
+  const stopped = applyWorkerMessage(running, {
+    type: 'stopped',
+    data: { status: 'stopped' },
+  });
+  const exited = applyWorkerMessage(stopped, {
+    type: 'worker-exit',
+    code: 0,
+    cancelled: false,
+  });
+  assert.equal(exited.status, 'stopped');
+  assert.equal(exited.settled, true);
+  assert.equal(exited.currentStage, null);
 });
 
 test('result stores data and ignores invented fields', () => {
@@ -254,6 +303,7 @@ test('stageDetailText summarizes only real reported counts', () => {
   assert.equal(stageDetailText({ observations: 10 }), '10 observations');
   assert.equal(stageDetailText({ events: 2 }), '2 events');
   assert.equal(stageDetailText({ lines: 7 }), '7 lines');
+  assert.equal(stageDetailText({ requests: 3 }), '3 requests');
   assert.equal(
     stageDetailText({ skipped: true, reason: 'no-observations' }),
     'No observations available',
@@ -272,4 +322,124 @@ test('fileUrlOf builds file URLs from trusted absolute paths', () => {
   assert.equal(fileUrlOf(''), '');
   assert.equal(fileUrlOf('relative/clip.mp4'), '');
   assert.equal(fileUrlOf(null), '');
+});
+
+test('adaptive_sample folds validated samples into run state', () => {
+  let run = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'hi',
+  });
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0,
+      speed: 'HIGH',
+      reason: 'Fast.',
+      next_timestamp: 0.5,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0.5,
+      speed: 'LOW',
+      reason: '',
+      next_timestamp: null,
+      observations: 2,
+      requests: 2,
+    },
+  });
+  assert.equal(run.status, 'processing');
+  assert.equal(run.adaptive.observations, 2);
+  assert.equal(run.adaptive.requests, 2);
+  assert.deepEqual(
+    run.adaptive.samples.map((s) => [s.timestamp, s.speed, s.next]),
+    [[0, 'HIGH', 0.5], [0.5, 'LOW', null]],
+  );
+  // Terminal messages keep the history for post-run inspection.
+  const stopped = applyWorkerMessage(run, {
+    type: 'stopped',
+    data: { status: 'stopped' },
+  });
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.adaptive.samples.length, 2);
+  const done = applyWorkerMessage(run, { type: 'result', data: {} });
+  assert.equal(done.adaptive.samples.length, 2);
+});
+
+test('adaptive samples never leak across runs; malformed samples ignored', () => {
+  let run = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'hi',
+  });
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0,
+      speed: 'HIGH',
+      reason: 'x',
+      next_timestamp: 1,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  assert.equal(run.adaptive.samples.length, 1);
+  const intact = run;
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 'x',
+      speed: 'HIGH',
+      reason: 'x',
+      next_timestamp: null,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  assert.equal(run, intact);
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 1,
+      speed: 'TURBO',
+      reason: 'x',
+      next_timestamp: null,
+      observations: 2,
+      requests: 2,
+    },
+  });
+  assert.equal(run, intact);
+  run = applyWorkerMessage(run, { type: 'adaptive_sample' });
+  assert.equal(run, intact);
+  // A new run resets the history: no cross-run leakage.
+  const fresh = applyWorkerMessage(run, {
+    type: 'started',
+    message: 'again',
+  });
+  assert.equal(fresh.adaptive, null);
+});
+
+test('adaptive sample history is bounded', () => {
+  let run = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'hi',
+  });
+  for (let i = 0; i < MAX_ADAPTIVE_SAMPLES + 100; i += 1) {
+    run = applyWorkerMessage(run, {
+      type: 'adaptive_sample',
+      data: {
+        timestamp: i,
+        speed: 'NORMAL',
+        reason: '',
+        next_timestamp: i + 1,
+        observations: i + 1,
+        requests: i + 1,
+      },
+    });
+  }
+  assert.equal(run.adaptive.samples.length, MAX_ADAPTIVE_SAMPLES);
+  assert.equal(run.adaptive.samples[0].timestamp, 100);
+  assert.equal(run.adaptive.observations, MAX_ADAPTIVE_SAMPLES + 100);
 });

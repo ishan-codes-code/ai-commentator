@@ -3,7 +3,7 @@
 // The Electron main process (main.js) wires this to IPC.
 
 import { spawn } from 'node:child_process';
-import { createLineParser, isValidWorkerMessage } from './worker-protocol.mjs';
+import { buildStopControlLine, createLineParser, isValidWorkerMessage } from './worker-protocol.mjs';
 
 function createWorkerManager({ spawnFn = spawn } = {}) {
   let active = null;
@@ -38,10 +38,10 @@ function createWorkerManager({ spawnFn = spawn } = {}) {
       if (typeof executable !== 'string' || executable === '') {
         throw new TypeError('executable must be a non-empty string.');
       }
-      const record = { cancelled: false, killTimer: null };
+      const record = { cancelled: false, killTimer: null, stopRequested: false };
       let child;
       try {
-        child = spawnFn(executable, argv, { stdio: ['ignore', 'pipe', 'pipe'] });
+        child = spawnFn(executable, argv, { stdio: ['pipe', 'pipe', 'pipe'] });
       } catch (err) {
         if (typeof onExit === 'function') {
           onExit({ code: null, signal: null, cancelled: false, spawnError: err });
@@ -49,6 +49,12 @@ function createWorkerManager({ spawnFn = spawn } = {}) {
         return { started: false, reason: 'spawn-throw', error: err };
       }
       record.child = child;
+      if (child.stdin && typeof child.stdin.on === 'function') {
+        // A late write to an exited child raises EPIPE here; it must
+        // never crash the main process. Delivery failures surface
+        // through requestStop()'s result instead.
+        child.stdin.on('error', () => {});
+      }
       active = record;
 
       const parser = createLineParser({
@@ -145,6 +151,38 @@ function createWorkerManager({ spawnFn = spawn } = {}) {
           }
         }
       });
+    },
+
+    /**
+     * Ask the active worker to stop cooperatively via its stdin control
+     * channel. Sends one `{"type":"stop","version":1}` line and returns
+     * whether the request was sent — never whether the run finished;
+     * completion arrives through onExit/onMessage as usual. Unlike
+     * cancel(), this never marks the record cancelled and never starts
+     * the SIGTERM/SIGKILL escalation. Writes always target the record
+     * captured at call time, so a stale call cannot reach a later run.
+     * Reasons: 'no-active-job', 'stdin-unavailable', 'already-requested',
+     * 'stop-requested', 'write-failed'.
+     */
+    requestStop() {
+      const record = active;
+      if (!record || !record.child) {
+        return { requested: false, reason: 'no-active-job' };
+      }
+      const stdin = record.child.stdin;
+      if (!stdin || typeof stdin.write !== 'function' || stdin.destroyed || stdin.writable === false) {
+        return { requested: false, reason: 'stdin-unavailable' };
+      }
+      if (record.stopRequested) {
+        return { requested: true, reason: 'already-requested' };
+      }
+      try {
+        stdin.write(buildStopControlLine());
+      } catch {
+        return { requested: false, reason: 'write-failed' };
+      }
+      record.stopRequested = true;
+      return { requested: true, reason: 'stop-requested' };
     },
 
     /** For tests: the active child process, if any. */

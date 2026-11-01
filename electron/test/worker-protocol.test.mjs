@@ -5,13 +5,16 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  buildStopControlLine,
   buildWorkerArgv,
   createLineParser,
+  isValidAdaptiveSample,
   isValidWorkerMessage,
   isVisionConfigured,
   resolvePythonExecutable,
   resolveWorkerScript,
   validateVideoInput,
+  WORKER_CONTROL_VERSION,
 } from '../src/worker-protocol.mjs';
 
 test('parser assembles a message split across chunks', () => {
@@ -76,6 +79,89 @@ test('isValidWorkerMessage accepts only known types', () => {
   assert.equal(isValidWorkerMessage('started'), false);
 });
 
+function validSample(overrides = {}) {
+  return {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 12.5,
+      speed: 'HIGH',
+      reason: 'Fast motion.',
+      next_timestamp: 13,
+      observations: 3,
+      requests: 3,
+      ...overrides,
+    },
+  };
+}
+
+test('adaptive_sample accepts a complete valid payload', () => {
+  assert.equal(isValidAdaptiveSample(validSample()), true);
+  assert.equal(isValidWorkerMessage(validSample()), true);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ next_timestamp: null })),
+    true,
+  );
+  assert.equal(isValidAdaptiveSample(validSample({ reason: '' })), true);
+});
+
+test('adaptive_sample rejects an invalid speed enum', () => {
+  for (const speed of ['high', 'TURBO', '', null, 3, undefined]) {
+    assert.equal(isValidAdaptiveSample(validSample({ speed })), false);
+  }
+  assert.equal(isValidWorkerMessage(validSample({ speed: 'nope' })), false);
+});
+
+test('adaptive_sample rejects bad timestamps and counters', () => {
+  assert.equal(isValidAdaptiveSample(validSample({ timestamp: -1 })), false);
+  assert.equal(isValidAdaptiveSample(validSample({ timestamp: NaN })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ timestamp: Infinity })),
+    false,
+  );
+  assert.equal(isValidAdaptiveSample(validSample({ timestamp: '12' })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ next_timestamp: -0.5 })),
+    false,
+  );
+  assert.equal(
+    isValidAdaptiveSample(validSample({ next_timestamp: 'soon' })),
+    false,
+  );
+  assert.equal(isValidAdaptiveSample(validSample({ observations: -1 })), false);
+  assert.equal(isValidAdaptiveSample(validSample({ requests: 1.5 })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ observations: '3' })),
+    false,
+  );
+});
+
+test('adaptive_sample rejects a bad or over-long reason', () => {
+  assert.equal(isValidAdaptiveSample(validSample({ reason: null })), false);
+  assert.equal(isValidAdaptiveSample(validSample({ reason: 7 })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ reason: 'x'.repeat(281) })),
+    false,
+  );
+  assert.equal(
+    isValidAdaptiveSample(validSample({ reason: 'x'.repeat(280) })),
+    true,
+  );
+});
+
+test('adaptive_sample rejects missing or malformed envelopes', () => {
+  assert.equal(isValidAdaptiveSample(null), false);
+  assert.equal(isValidAdaptiveSample({ type: 'started' }), false);
+  assert.equal(isValidAdaptiveSample({ type: 'adaptive_sample' }), false);
+  assert.equal(
+    isValidAdaptiveSample({ type: 'adaptive_sample', data: null }),
+    false,
+  );
+  assert.equal(
+    isValidWorkerMessage({ type: 'adaptive_sample', data: {} }),
+    false,
+  );
+});
+
 test('resolvePythonExecutable reports the venv interpreter or its absence', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'venv-resolve-'));
   try {
@@ -115,6 +201,42 @@ test('resolveWorkerScript reports presence or absence', () => {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('control channel carries a versioned stop line', () => {
+  assert.equal(WORKER_CONTROL_VERSION, 1);
+  assert.equal(buildStopControlLine(), '{"type":"stop","version":1}\n');
+  assert.deepEqual(JSON.parse(buildStopControlLine()), { type: 'stop', version: 1 });
+});
+
+test('stopped is a known worker message type', () => {
+  assert.equal(isValidWorkerMessage({ type: 'stopped', data: {} }), true);
+});
+
+test('buildWorkerArgv passes adaptive flags', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', {
+      adaptive: true,
+      adaptiveMaxFrames: 3,
+    }),
+    ['worker.py', 'clip.mp4', '--adaptive', '--adaptive-max-frames', '3'],
+  );
+});
+
+test('buildWorkerArgv rejects non-positive adaptiveMaxFrames', () => {
+  for (const adaptiveMaxFrames of [0, -2, 2.5, 'many', NaN]) {
+    assert.throws(
+      () => buildWorkerArgv('worker.py', 'clip.mp4', { adaptiveMaxFrames }),
+      /positive integer/,
+    );
+  }
+});
+
+test('buildWorkerArgv omits adaptive flags unless requested', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', { skipVision: true }),
+    ['worker.py', 'clip.mp4', '--skip-vision'],
+  );
 });
 
 test('buildWorkerArgv passes explicit limit for AI runs', () => {

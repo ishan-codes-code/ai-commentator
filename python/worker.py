@@ -12,8 +12,10 @@ Exit codes: 0 when every stage succeeds, 1 when a pipeline stage fails,
 
 import argparse
 import contextlib
+
 import json
 import os
+import signal
 import sys
 import traceback
 from pathlib import Path
@@ -35,6 +37,33 @@ def emit(message: dict) -> None:
 
 def emit_error(stage: str, message: str) -> None:
     emit({"type": "error", "stage": stage, "message": message})
+
+
+def install_stop_handler(token):
+    """Route SIGTERM to an adaptive StopToken; return the previous handler.
+
+    Installed only around the adaptive stage: Electron's cancel sends
+    SIGTERM, which then becomes a graceful stop (finish the in-flight
+    request, persist it, halt) instead of a kill. Returns None when the
+    handler cannot be installed (non-main thread); the run still works,
+    only the graceful path is unavailable.
+    """
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, lambda signum, frame: token.request_stop())
+    except (ValueError, OSError, RuntimeError):
+        return None
+    return previous
+
+
+def restore_stop_handler(previous):
+    """Restore the SIGTERM handler saved by install_stop_handler."""
+    if previous is None:
+        return
+    try:
+        signal.signal(signal.SIGTERM, previous)
+    except (ValueError, OSError, RuntimeError):
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -89,6 +118,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also generate the final casting script (one paid text-only "
         "model call). Offline stages only by default.",
     )
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="Sample the video adaptively: one captured frame, one vision "
+        "request, and one sampling decision per step (paid). Replaces the "
+        "frame_extraction and vision_analysis stages with a single "
+        "adaptive_vision stage.",
+    )
+    parser.add_argument(
+        "--adaptive-max-frames",
+        type=engine.parse_max_frames_argument,
+        default=None,
+        metavar="N",
+        help="Maximum sampled frames for --adaptive (positive integer, "
+        f"default {engine.ADAPTIVE_DEFAULT_MAX_FRAMES}).",
+    )
     return parser
 
 
@@ -132,6 +177,19 @@ def plan_stages(args, obs_dir):
     executed, and never counted as completed.
     """
     plan = [("frame_extraction", "run")]
+    if getattr(args, "adaptive", False):
+        # Adaptive mode replaces frame_extraction + vision_analysis with a
+        # single sequential vision stage; on success the offline downstream
+        # stages always run (a stopped or failed adaptive stage returns
+        # before they start).
+        plan = [("adaptive_vision", "run")]
+        plan.extend(
+            (stage, "run")
+            for stage in ("state_rebuild", "event_detection", "commentary")
+        )
+        if getattr(args, "with_script", False):
+            plan.append(("script", "run"))
+        return plan
     plan.append(("vision_analysis", "run" if not args.skip_vision else "skip"))
     downstream = ("state_rebuild", "event_detection", "commentary")
     if args.skip_vision and count_observations(obs_dir) == 0:
@@ -149,6 +207,8 @@ def plan_stages(args, obs_dir):
 def run_mode(plan):
     """Classify a run from its plan: full analysis or extraction-only."""
     downstream = {"state_rebuild", "event_detection", "commentary"}
+    if any(stage == "adaptive_vision" for stage, _ in plan):
+        return "adaptive"
     if any(stage in downstream and mode == "skip" for stage, mode in plan):
         return "extraction-only"
     return "full"
@@ -190,6 +250,8 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
     lines: list = []
 
     def progress(stage: str) -> None:
+        if stage not in plan:
+            return
         emit(
             {
                 "type": "progress",
@@ -201,6 +263,8 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
         )
 
     def skip(stage: str, reason: str) -> None:
+        if stage not in plan:
+            return
         skipped.append(stage)
         emit(
             {
@@ -213,6 +277,8 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
         )
 
     def complete(stage: str, detail: dict | None = None) -> None:
+        if stage not in plan:
+            return
         done.append(stage)
         message: dict = {
             "type": "stage_completed",
@@ -227,11 +293,135 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
     video = Path(args.video)
     emit({"type": "started", "message": f"Processing video {video.name}"})
 
+    if getattr(args, "adaptive", False):
+        # Adaptive vision (paid, sequential): capture one frame at a time
+        # from the video, request one observation + sampling decision per
+        # frame, and schedule the next timestamp from that decision. No
+        # extracted JPEG set is written beforehand.
+        progress("adaptive_vision")
+        # The batch vision stage must not run after adaptive sampling: take
+        # the skip path below (suppressed from the protocol stream by the
+        # plan guards, since vision_analysis is not a planned stage here).
+        args.skip_vision = True
+        stop_token = engine.StopToken()
+        previous_handler = install_stop_handler(stop_token)
+        # Stdin control channel (M4.2-A): a daemon thread pumps control
+        # lines into the same token without blocking the loop. Detached
+        # in the finally below; late commands then become no-ops.
+        control_listener = engine.start_control_listener(stop_token)
+
+        def report_iteration(summary) -> None:
+            """Forward one persisted iteration as an NDJSON message.
+
+            Reporting-only: the engine contains hook errors, and this
+            function never triggers requests. Malformed summaries are
+            noted on stderr and skipped so the stream stays clean.
+            """
+            try:
+                message = {
+                    "type": "adaptive_sample",
+                    "data": {
+                        "timestamp": float(summary["timestamp"]),
+                        "speed": summary["speed"],
+                        "reason": str(summary.get("reason") or ""),
+                        "next_timestamp": (
+                            None
+                            if summary.get("next_timestamp") is None
+                            else float(summary["next_timestamp"])
+                        ),
+                        "observations": int(summary["observations"]),
+                        "requests": int(summary["requests"]),
+                    },
+                }
+            except (KeyError, TypeError, ValueError) as exc:
+                print(
+                    f"Adaptive progress report skipped: {exc}",
+                    file=sys.stderr,
+                )
+                return
+            emit(message)
+        try:
+            with contextlib.redirect_stdout(sys.stderr):
+                adaptive_result = engine.run_adaptive_vision(
+                    video_path=video,
+                    observations_dir=obs_dir,
+                    max_frames=(
+                        args.adaptive_max_frames
+                        if getattr(args, "adaptive_max_frames", None)
+                        is not None
+                        else engine.ADAPTIVE_DEFAULT_MAX_FRAMES
+                    ),
+                    stop_token=stop_token,
+                    on_iteration=report_iteration,
+                )
+        finally:
+            engine.detach_control_listener(control_listener)
+            restore_stop_handler(previous_handler)
+        if adaptive_result["status"] == "failed":
+            failure = adaptive_result.get("error")
+            if not isinstance(failure, dict):
+                failure = {}
+            failure_message = failure.get("message")
+            emit_error(
+                "adaptive_vision",
+                "Adaptive sampling failed "
+                f"({adaptive_result['termination']})"
+                + (
+                    f": {failure_message}"
+                    if failure_message
+                    else "; see worker stderr."
+                ),
+            )
+            return 1, {}
+        adaptive_observations = count_observations(obs_dir)
+        if adaptive_result["status"] == "stopped":
+            stopped_data = {
+                "video": str(video),
+                "output_dir": str(base),
+                "stages": done,
+                "skipped": skipped,
+                "mode": "adaptive",
+                "frames": count_frames(frames_dir),
+                "observations": adaptive_observations,
+                "events": 0,
+                "commentary_lines": 0,
+                "script": "skipped",
+                "status": "stopped",
+                "termination": adaptive_result["termination"],
+                "requests": adaptive_result["requests"],
+                "artifacts": {
+                    "state": str(state_path)
+                    if state_path.is_file()
+                    else None,
+                    "events": str(events_path)
+                    if events_path.is_file()
+                    else None,
+                    "commentary": (
+                        str(commentary_path)
+                        if commentary_path.is_file()
+                        else None
+                    ),
+                    "script": None,
+                    "manifest": str(adaptive_result["manifest"]),
+                },
+            }
+            emit({"type": "stopped", "data": stopped_data})
+            return 0, stopped_data
+        complete(
+            "adaptive_vision",
+            {
+                "observations": adaptive_observations,
+                "requests": adaptive_result["requests"],
+                "termination": adaptive_result["termination"],
+            },
+        )
+
     # Frame extraction (offline).
     progress("frame_extraction")
     try:
         with contextlib.redirect_stdout(sys.stderr):
-            engine.main(video_path=video, frames_dir=frames_dir)
+            if not getattr(args, "adaptive", False):
+                engine.main(video_path=video, frames_dir=frames_dir)
     except (FileNotFoundError, RuntimeError, OSError) as exc:
         emit_error("frame_extraction", f"{exc}")
         return 1, {}
@@ -380,6 +570,26 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     problem = validate_video(Path(args.video))
+    adaptive = getattr(args, "adaptive", False)
+    if adaptive and args.skip_vision:
+        emit_error(
+            "validation", "--adaptive cannot be combined with --skip-vision."
+        )
+        return 2
+    if adaptive and (
+        args.limit is not None or args.jobs is not None or args.force
+    ):
+        emit_error(
+            "validation",
+            "--limit, --jobs, and --force are batch-only and cannot be "
+            "combined with --adaptive (use --adaptive-max-frames).",
+        )
+        return 2
+    if args.adaptive_max_frames is not None and not adaptive:
+        emit_error(
+            "validation", "--adaptive-max-frames requires --adaptive."
+        )
+        return 2
     if problem is not None:
         emit_error("validation", problem)
         return 2
@@ -408,7 +618,9 @@ def main(argv: list[str] | None = None) -> int:
         traceback.print_exc(file=sys.stderr)
         emit_error("worker", f"Unexpected worker failure: {exc}")
         return 1
-    if code == 0:
+    if code == 0 and data.get("status") != "stopped":
+        # A gracefully stopped run already emitted its terminal `stopped`
+        # message; emitting `result` too would blur the terminal state.
         emit({"type": "result", "data": data})
     return code
 

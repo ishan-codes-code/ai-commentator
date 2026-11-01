@@ -10,13 +10,27 @@ and the tests together.
 ## Transport
 
 - Command: `<repo>/.venv/bin/python python/worker.py VIDEO [--output-dir DIR]
-  [--limit N] [--force] [--jobs J] [--skip-vision] [--with-script]`
+  [--limit N] [--force] [--jobs J] [--skip-vision] [--with-script]
+  [--adaptive [--adaptive-max-frames N]]`
   (Windows interpreter: `.venv/Scripts/python.exe`).
 - The video path is a positional argument; every flag after it is optional.
 - **stdout carries only protocol messages**: one JSON object per line,
   newline-delimited (NDJSON). Engine diagnostics and legacy `print` output
   are redirected to **stderr** so stdout stays parseable even though the
   engine itself prints freely.
+- The child is spawned with `stdio: ['pipe', 'pipe', 'pipe']`, owned as
+  follows: **stdout** carries only protocol messages (Electron reads);
+  **stderr** carries diagnostics (Electron forwards); **stdin** carries
+  only control messages (Electron writes, the worker reads). The process
+  manager owns stdin writes; the renderer never touches the child.
+- **Control messages** are one newline-delimited JSON object per line:
+  `{"type":"stop","version":1}` is version 1's only command, built by
+  `buildStopControlLine()` and parsed by
+  `python/ai_commentator/vision/control.py`. The worker ignores blank
+  lines, rejects malformed JSON, unknown commands, and unsupported
+  versions with a short stderr note (never echoing the payload), and
+  ends its reader quietly on EOF. Nothing but `stop` version 1 may
+  travel this channel: no paths, no shell, no code, no secrets.
 - The worker never prints secrets. `BASETEN_API_KEY` is read from the
   environment and its value never appears in any message.
 
@@ -28,6 +42,8 @@ and the tests together.
 {"type": "stage_completed", "stage": "frame_extraction", "completed": 1, "total": 5, "detail": {"frames": 3}}
 {"type": "stage_completed", "stage": "vision_analysis", "completed": 1, "total": 5, "detail": {"skipped": true, "reason": "option-skipped"}}
 {"type": "result", "data": {"video": "/v/clip.mp4", "output_dir": "/o", "stages": ["frame_extraction", "state_rebuild", "event_detection", "commentary"], "skipped": ["vision_analysis"], "mode": "full", "frames": 3, "observations": 3, "events": 0, "commentary_lines": 1, "script": "skipped", "artifacts": {"state": "/o/observations/match_state.json", "events": "/o/events/events.json", "commentary": "/o/commentary/commentary.json", "script": null}}}
+{"type": "adaptive_sample", "data": {"timestamp": 12.5, "speed": "HIGH", "reason": "Fast motion.", "next_timestamp": 13.0, "observations": 3, "requests": 3}}
+{"type": "stopped", "data": {"status": "stopped", "termination": "stop-requested", "mode": "adaptive", "observations": 2, "requests": 2}}
 {"type": "error", "stage": "state_rebuild", "message": "State rebuild failed; see worker stderr."}
 ```
 
@@ -45,6 +61,20 @@ Message types:
 - `stage_completed` — `stage` plus a small `detail` object with real,
   observed values only (frame/observation/event/line counts from files
   the stage actually wrote, or `{"skipped": true, "reason": ...}`).
+- `adaptive_sample` — progress message, one per validated, persisted
+  adaptive iteration (never terminal). `data` carries the scheduled
+  source-video `timestamp` (finite, ≥ 0), the validated `speed` enum
+  (`HIGH`/`NORMAL`/`LOW`), the bounded untrusted `reason` (≤ 280 chars),
+  the already-computed `next_timestamp` (`null` when the run ends at the
+  video duration), and the cumulative `observations`/`requests` counters
+  (non-negative integers). Anything outside this shape is rejected as a
+  protocol error. Only the sampling history is new: observations keep
+  flowing through the `observation-v1` files, never through this message.
+- `stopped` — terminal message of a gracefully stopped adaptive run
+  (`--adaptive` only). `data` mirrors the `result` shape plus `status`
+  (`"stopped"`), `termination` (`"stop-requested"`), request counts, and a
+  `manifest` artifact path. Partial observations and the manifest survive.
+  No `result` follows it; the process exits `0`.
 - `result` — final message on success. `data` reports the video path,
   output directory, completed stage names in order, skipped stage names
   in order, run `mode` (`full` or `extraction-only`), observed counts,
@@ -67,25 +97,69 @@ presence (`plan_stages`): with `--skip-vision` and no observations, the
 downstream analysis stages are skipped with reason `no-observations`
 and the run completes as `extraction-only`. Corrupt observations still
 fail `state_rebuild`; nothing invalid is ever silently accepted.
+With `--adaptive`, the plan is `[adaptive_vision, state_rebuild,
+event_detection, commentary]` (plus `script` with `--with-script`):
+`frame_extraction` and batch `vision_analysis` never run and emit
+nothing, and `--limit`/`--jobs`/`--force`/`--skip-vision` are rejected
+as conflicts (exit `2`). A completed adaptive stage reports
+`observations`/`requests`/`termination` detail; a stopped stage emits
+`stopped` and halts before downstream work; a failed stage emits
+`error`. See `docs/contracts/adaptive-sampling-v1.md`.
 
 Electron also synthesizes two renderer-only messages that never appear
 on the worker's stdout: `{type: "worker-log", text}` for stderr output
 and `{type: "worker-exit", code, signal, cancelled}` when the child ends.
 
+## Cooperative stop vs forceful cancellation
+
+- Cooperative stop (`requestStop()` → stdin `stop` line → the worker's
+  existing adaptive `StopToken`): the in-flight vision request completes,
+  validates, and persists; the run halts before the next capture and
+  emits terminal `stopped` with exit `0`. The manager reports whether
+  the line was *sent* (`{requested, reason}`); completion is observed
+  through `stopped` and the child's actual exit, never claimed early.
+  Reasons: `no-active-job`, `stdin-unavailable`, `already-requested`
+  (idempotent repeat), `stop-requested`, `write-failed` (retryable).
+  Cooperative stop never marks the record cancelled and never starts
+  the SIGTERM/SIGKILL escalation.
+- Forceful cancellation (`cancel()`): SIGTERM, then SIGKILL after the
+  grace period; the child ends with `cancelled: true` and the run
+  settles as `cancelled`. This remains the shutdown and fallback path,
+  and still works after a cooperative request.
+- Terminal settlement: `done` (exit `0` after `result`), `stopped`
+  (exit `0` after `stopped`; partial observations and the run manifest
+  survive), `error` (a stage failed), `cancelled` (forceful cancel),
+  `interrupted` (app quit mid-run). A stop is never reported as
+  `cancelled`, and `stopped` never counts as a successful completion.
+- Platform notes: stdin delivery works identically on Windows and
+  POSIX (it is the Windows-safe path — no signals involved). The
+  worker's SIGTERM-to-token mapping from M4.1 stays as a POSIX fallback
+  inside adaptive runs only; every other mode keeps existing behavior.
+
 ## Validation and exit codes
 
 - Exit `0`: the planned stages all ran or were explicitly skipped;
-  stdout ends with `result` (including `extraction-only` runs).
+  stdout ends with `result` (including `extraction-only` runs) or with
+  `stopped` (a gracefully stopped adaptive run, still exit `0`).
 - Exit `1`: a pipeline stage failed; stdout ends with `error`
   (missing API key for a requested paid stage, rejected observations,
   stale snapshot, write failure, unexpected exception).
 - Exit `2`: argument or input validation failed. Missing/unsupported
   video files are reported as
   `{"type": "error", "stage": "validation", "message": ...}` on stdout
+  (including `--adaptive` conflicts: with `--skip-vision`,
+  batch-only `--limit`/`--jobs`/`--force`, or `--adaptive-max-frames`
+  without `--adaptive`)
   before exiting; `argparse` usage errors go to stderr (standard
   behavior, no protocol message).
 - Missing API keys are detected before any paid call or extraction work
   (fail fast); no output tree is created in that case.
+- In adaptive mode only, SIGTERM is caught and becomes a graceful stop
+  (`stopped`, exit `0`): the in-flight request completes, validates, and
+  persists before halting. Electron's cancel therefore degrades to
+  graceful stop within its SIGKILL grace period on POSIX; on Windows the
+  plain kill still terminates immediately. Other modes keep cancel
+  behavior below.
 - `KeyboardInterrupt` (e.g. Electron cancel via SIGTERM/SIGKILL) emits
   `{"type": "error", "stage": "worker", "message": "Processing was cancelled."}`
   and exits `130`.
@@ -101,6 +175,13 @@ and `{type: "worker-exit", code, signal, cancelled}` when the child ends.
   and the worker fails fast before any extraction work; the key value
   never appears in any message. `vision-status` reports only whether
   a key is configured.
+- Adaptive sampling: `--adaptive [--adaptive-max-frames N]` (paid).
+  One captured frame, one vision request, one validated sampling decision
+  per step; the next timestamp follows the decision (HIGH 0.5s, NORMAL
+  3s, LOW 6s). No extracted JPEG set is written; stages are
+  `adaptive_vision` plus the offline downstream; the run `mode` is
+  `adaptive`. The first failure terminates the run; a stop request emits
+  `stopped` instead.
 - One attempt per frame: the engine performs no automatic retries,
   so a run spends at most one vision call per selected frame; cached
   validated observations are reused unless `--force` is passed.
@@ -114,9 +195,14 @@ dispatched as a final message.
 ## Testing
 
 - `tests/test_worker.py` covers argument parsing, invalid video paths,
-  pure-NDJSON stdout, error handling, exit codes, and secret redaction —
+  pure-NDJSON stdout, error handling, exit codes, and secret redaction,
+  and `tests/test_adaptive.py` covers the adaptive stage, the `stopped`
+  terminal, flag conflicts, the adaptive protocol (including
+  `adaptive_sample` emission), the iteration hook, and the engine stop boundaries —
   all offline with fixture videos and observations, never paid calls.
 - `electron/test/` covers incremental parsing (split chunks, multiple
   messages per chunk, invalid lines), input validation, interpreter
-  resolution, and process cancel/cleanup — with `node:test`, no
+  resolution, process cancel/cleanup, `adaptive_sample` shape validation,
+  run-option mapping, adaptive state folding, fractional observation
+  listing, and cooperative-stop IPC/settlement — with `node:test`, no
   dependencies.

@@ -2,6 +2,9 @@ import { getProjectOutputDir, getProject as getStoredProject, settleProjectRun a
 import { buildWorkerArgv, isVisionConfigured, resolvePythonExecutable, resolveWorkerScript, validateVideoInput } from '../../worker-protocol.mjs';
 
 export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager, state, repoRoot, sendWorkerEvent, getMainWindow }) {
+  // True once the active run emitted its terminal `stopped` message.
+  // Reset on every start; runs never overlap, so one flag is enough.
+  let stoppedSeenForActiveRun = false;
   function settleProjectRun(projectId, status) {
     if (typeof projectId !== 'string' || projectId === '') return;
     try { settleStoredRun(app.getPath('userData'), projectId, status); } catch { /* Project deleted or unreadable. */ }
@@ -85,10 +88,16 @@ export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager,
     } catch (err) {
       return { ok: false, error: err?.message ?? 'Invalid run options.' };
     }
+    stoppedSeenForActiveRun = false;
     const startedJob = workerManager.start({
       executable,
       argv,
-      onMessage: (message) => sendWorkerEvent(message),
+      onMessage: (message) => {
+        if (message && message.type === 'stopped') {
+          stoppedSeenForActiveRun = true;
+        }
+        sendWorkerEvent(message);
+      },
       onStderr: (text) => sendWorkerEvent({ type: 'worker-log', text }),
       onExit: ({ code, signal, cancelled, spawnError }) => {
         const finishedProjectId = state.activeProjectId;
@@ -104,6 +113,8 @@ export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager,
         }
         if (state.appQuitting) {
           settleProjectRun(finishedProjectId, 'interrupted');
+        } else if (stoppedSeenForActiveRun) {
+          settleProjectRun(finishedProjectId, 'stopped');
         } else if (cancelled) {
           settleProjectRun(finishedProjectId, 'cancelled');
         } else if (code === 0) {
@@ -135,6 +146,25 @@ export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager,
     }
   });
   
+  ipcMain.handle('request-stop', async () => {
+    // Cooperative stop: one control line over the worker's stdin. The
+    // renderer learns only whether the request was sent; completion
+    // arrives as worker events (`stopped`, then `worker-exit`).
+    try {
+      const result = workerManager.requestStop();
+      if (!result || typeof result !== 'object') {
+        return { ok: false, error: 'Stop request failed.' };
+      }
+      return {
+        ok: true,
+        requested: result.requested === true,
+        reason: typeof result.reason === 'string' ? result.reason : 'unknown',
+      };
+    } catch {
+      return { ok: false, error: 'Stop request failed.' };
+    }
+  });
+
   ipcMain.handle('cancel-processing', async () => {
     const stopped = await workerManager.cancel();
     return { ok: true, stopped };
