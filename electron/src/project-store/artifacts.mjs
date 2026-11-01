@@ -6,10 +6,14 @@ export const MAX_ARTIFACT_FILE_BYTES = 1024 * 1024;
 export const MAX_LIST_ENTRIES = 200;
 
 const FRAME_RE = /^frame_(\d+)\.(jpg|jpeg|png)$/;
-const OBSERVATION_RE = /^frame_(\d+)\.json$/;
+// Integer (`frame_00003.json`) and trimmed-decimal (`frame_00000.5.json`)
+// observation names. The decimal branch is the adaptive-sampling form
+// (millisecond precision, no trailing zeros); anything else is rejected.
+const OBSERVATION_RE = /^frame_(\d+(?:\.\d{1,3})?)\.json$/;
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a']);
 
 const ARTIFACT_FILES = {
+  manifest: ['observations', 'adaptive_run.json'],
   state: ['observations', 'match_state.json'],
   events: ['events', 'events.json'],
   commentary: ['commentary', 'commentary.json'],
@@ -105,6 +109,7 @@ export function listArtifacts(userDataPath, projectId) {
   }
   observationEntries.sort((a, b) => a.timestamp - b.timestamp);
 
+  const manifest = summarizeJsonDocument(projectSubdir(dir, 'output', ...ARTIFACT_FILES.manifest));
   const state = summarizeJsonDocument(projectSubdir(dir, 'output', ...ARTIFACT_FILES.state));
   const eventsSummary = summarizeJsonDocument(projectSubdir(dir, 'output', ...ARTIFACT_FILES.events));
   const commentarySummary = summarizeJsonDocument(projectSubdir(dir, 'output', ...ARTIFACT_FILES.commentary));
@@ -146,6 +151,7 @@ export function listArtifacts(userDataPath, projectId) {
     projectId,
     frames: { count: frameCount, items: frameEntries },
     observations: { count: observationCount, items: observationEntries },
+    manifest,
     state,
     events: { ...eventsSummary, count: eventCount },
     commentary: { ...commentarySummary, lines: commentaryLines },

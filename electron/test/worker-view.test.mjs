@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  MAX_ADAPTIVE_SAMPLES,
   MAX_WORKER_LOGS,
   STAGE_LABELS,
   applyWorkerMessage,
@@ -321,4 +322,124 @@ test('fileUrlOf builds file URLs from trusted absolute paths', () => {
   assert.equal(fileUrlOf(''), '');
   assert.equal(fileUrlOf('relative/clip.mp4'), '');
   assert.equal(fileUrlOf(null), '');
+});
+
+test('adaptive_sample folds validated samples into run state', () => {
+  let run = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'hi',
+  });
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0,
+      speed: 'HIGH',
+      reason: 'Fast.',
+      next_timestamp: 0.5,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0.5,
+      speed: 'LOW',
+      reason: '',
+      next_timestamp: null,
+      observations: 2,
+      requests: 2,
+    },
+  });
+  assert.equal(run.status, 'processing');
+  assert.equal(run.adaptive.observations, 2);
+  assert.equal(run.adaptive.requests, 2);
+  assert.deepEqual(
+    run.adaptive.samples.map((s) => [s.timestamp, s.speed, s.next]),
+    [[0, 'HIGH', 0.5], [0.5, 'LOW', null]],
+  );
+  // Terminal messages keep the history for post-run inspection.
+  const stopped = applyWorkerMessage(run, {
+    type: 'stopped',
+    data: { status: 'stopped' },
+  });
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.adaptive.samples.length, 2);
+  const done = applyWorkerMessage(run, { type: 'result', data: {} });
+  assert.equal(done.adaptive.samples.length, 2);
+});
+
+test('adaptive samples never leak across runs; malformed samples ignored', () => {
+  let run = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'hi',
+  });
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0,
+      speed: 'HIGH',
+      reason: 'x',
+      next_timestamp: 1,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  assert.equal(run.adaptive.samples.length, 1);
+  const intact = run;
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 'x',
+      speed: 'HIGH',
+      reason: 'x',
+      next_timestamp: null,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  assert.equal(run, intact);
+  run = applyWorkerMessage(run, {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 1,
+      speed: 'TURBO',
+      reason: 'x',
+      next_timestamp: null,
+      observations: 2,
+      requests: 2,
+    },
+  });
+  assert.equal(run, intact);
+  run = applyWorkerMessage(run, { type: 'adaptive_sample' });
+  assert.equal(run, intact);
+  // A new run resets the history: no cross-run leakage.
+  const fresh = applyWorkerMessage(run, {
+    type: 'started',
+    message: 'again',
+  });
+  assert.equal(fresh.adaptive, null);
+});
+
+test('adaptive sample history is bounded', () => {
+  let run = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'hi',
+  });
+  for (let i = 0; i < MAX_ADAPTIVE_SAMPLES + 100; i += 1) {
+    run = applyWorkerMessage(run, {
+      type: 'adaptive_sample',
+      data: {
+        timestamp: i,
+        speed: 'NORMAL',
+        reason: '',
+        next_timestamp: i + 1,
+        observations: i + 1,
+        requests: i + 1,
+      },
+    });
+  }
+  assert.equal(run.adaptive.samples.length, MAX_ADAPTIVE_SAMPLES);
+  assert.equal(run.adaptive.samples[0].timestamp, 100);
+  assert.equal(run.adaptive.observations, MAX_ADAPTIVE_SAMPLES + 100);
 });

@@ -151,6 +151,7 @@ def run_adaptive_vision(
     intervals=None,
     client=None,
     stop_token=None,
+    on_iteration=None,
 ):
     """Run the adaptive sampling loop; return a result dict (never None).
 
@@ -159,7 +160,12 @@ def run_adaptive_vision(
     ``max_frames`` paid requests are made; the first failure terminates the
     run (no retries, no repair calls). ``client`` and ``stop_token`` exist
     for tests and the worker; a live client is created (and closed) only
-    when none is injected. Result ``status`` is ``completed``, ``stopped``,
+    when none is injected. ``on_iteration`` is an optional reporting hook
+    called once per validated, persisted iteration with a plain dict
+    (``timestamp``, ``speed``, ``reason``, ``next_timestamp`` or None at
+    video end, ``observations``, ``requests``); it never triggers another
+    request and its own exceptions are contained so reporting can never
+    break the loop. Result ``status`` is ``completed``, ``stopped``,
     or ``failed`` with a ``termination`` reason and an optional ``error``.
     """
     from pathlib import Path
@@ -329,10 +335,28 @@ def run_adaptive_vision(
                         f"[{manifest['observations']}/{limit}] Sampled "
                         f"{timestamp}s -> {speed}."
                     )
+                next_timestamp = scheduler.next_timestamp(timestamp, speed)
+                if on_iteration is not None:
+                    try:
+                        on_iteration(
+                            {
+                                "timestamp": timestamp,
+                                "speed": speed,
+                                "reason": reason,
+                                "next_timestamp": next_timestamp,
+                                "observations": manifest["observations"],
+                                "requests": manifest["requests"],
+                            }
+                        )
+                    except Exception as exc:
+                        print(
+                            "Adaptive iteration hook failed; "
+                            f"continuing without it: {exc}",
+                            file=sys.stderr,
+                        )
                 if token.is_stopping():
                     print("Adaptive run stopping after persisted observation.")
                     return finish("stopped", TERMINATION_STOP_REQUESTED)
-                next_timestamp = scheduler.next_timestamp(timestamp, speed)
                 if next_timestamp is None:
                     print(
                         "Adaptive run finished: reached video end "

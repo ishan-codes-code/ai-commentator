@@ -76,6 +76,15 @@ export function stageDetailText(detail) {
 
 export const MAX_WORKER_LOGS = 50;
 
+/**
+ * Maximum adaptive samples kept per run. Runs are bounded server-side
+ * (UI default 10, engine default 60), so this cap only guards against
+ * unbounded growth, never truncates a normal run.
+ */
+export const MAX_ADAPTIVE_SAMPLES = 500;
+
+export const ADAPTIVE_SPEEDS = ['HIGH', 'NORMAL', 'LOW'];
+
 export function createInitialRunState() {
   return {
     status: 'idle',
@@ -86,6 +95,11 @@ export function createInitialRunState() {
     result: null,
     error: null,
     workerLogs: [],
+    // Adaptive sampling decision history for the active run (null when
+    // the run is not adaptive). Reset by 'started', so samples can never
+    // leak from one run into the next; terminal messages keep it for
+    // post-run inspection.
+    adaptive: null,
     // True once the worker lifecycle for this run is over (worker-exit,
     // or a spawn failure that never produces a process). The UI only
     // allows a new run after the previous run has settled, so a late
@@ -146,6 +160,43 @@ export function applyWorkerMessage(state, message) {
           },
         },
         currentStage: null,
+      };
+    }
+    case 'adaptive_sample': {
+      // Progress only: one validated sample per persisted iteration.
+      // Kept verbatim (main already validated the shape) and bounded;
+      // samples survive terminal messages for post-run inspection.
+      const data = message.data;
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        typeof data.timestamp !== 'number' ||
+        !Number.isFinite(data.timestamp) ||
+        !ADAPTIVE_SPEEDS.includes(data.speed) ||
+        typeof data.reason !== 'string'
+      ) {
+        return state;
+      }
+      const sample = {
+        timestamp: data.timestamp,
+        speed: data.speed,
+        reason: data.reason,
+        next:
+          data.next_timestamp === null || data.next_timestamp === undefined
+            ? null
+            : data.next_timestamp,
+      };
+      const previous = state.adaptive;
+      const samples = [...(previous?.samples ?? []), sample].slice(
+        -MAX_ADAPTIVE_SAMPLES,
+      );
+      return {
+        ...state,
+        adaptive: {
+          samples,
+          observations: data.observations,
+          requests: data.requests,
+        },
       };
     }
     case 'stopped': {

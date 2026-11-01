@@ -75,13 +75,13 @@ function setup(t, { requestStopResult } = {}) {
   return { userData, handlers, workerManager, state, events, getStart: () => captured };
 }
 
-async function startRun(t, setupResult, videoPath) {
+async function startRun(t, setupResult, videoPath, options) {
   const video = videoPath ?? makeFixtureVideo(path.join(setupResult.userData, 'incoming'));
   const project = createProject(setupResult.userData, { name: 'stop test', sourcePath: video });
   // ipcMain passes the event first; skipVision keeps the test independent
   // of any ambient BASETEN_API_KEY.
   const started = await setupResult.handlers['process-video'](
-    {}, video, { skipVision: true, projectId: project.id },
+    {}, video, { skipVision: true, projectId: project.id, ...(options ?? {}) },
   );
   assert.equal(started.ok, true);
   // Mirror the renderer: a started run marks its project processing, which
@@ -188,4 +188,54 @@ test('quitting still settles as interrupted after a stop', async (t) => {
   s.state.appQuitting = true;
   start.onExit({ code: 0, signal: null, cancelled: false });
   assert.equal(getProject(s.userData, projectId).processingStatus, 'interrupted');
+});
+
+test('an adaptive run carries sampling bounds and settles stopped', async (t) => {
+  const s = setup(t);
+  // Adaptive runs are paid: the key gate needs a (dummy) key, but the
+  // fake manager never spawns so no request can leave the machine.
+  const savedKey = process.env.BASETEN_API_KEY;
+  process.env.BASETEN_API_KEY = 'test-dummy-key';
+  let projectId;
+  try {
+    projectId = await startRun(t, s, undefined, {
+      adaptive: true,
+      adaptiveMaxFrames: 5,
+      skipVision: undefined,
+    });
+  } finally {
+    if (savedKey === undefined) {
+      delete process.env.BASETEN_API_KEY;
+    } else {
+      process.env.BASETEN_API_KEY = savedKey;
+    }
+  }
+  const start = s.getStart();
+  assert.ok(start.argv.includes('--adaptive'));
+  const flagAt = start.argv.indexOf('--adaptive-max-frames');
+  assert.notEqual(flagAt, -1);
+  assert.equal(start.argv[flagAt + 1], '5');
+  start.onMessage({ type: 'started', message: 'Processing video clip.mp4' });
+  start.onMessage({
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 0,
+      speed: 'HIGH',
+      reason: 'Fast.',
+      next_timestamp: 0.5,
+      observations: 1,
+      requests: 1,
+    },
+  });
+  start.onMessage({ type: 'stopped', data: { status: 'stopped' } });
+  start.onExit({ code: 0, signal: null, cancelled: false });
+  assert.equal(getProject(s.userData, projectId).processingStatus, 'stopped');
+});
+
+test('stop-request IPC acceptance does not settle the run by itself', async (t) => {
+  const s = setup(t, { requestStopResult: { requested: true, reason: 'stop-requested' } });
+  const accepted = await s.handlers['request-stop']();
+  assert.deepEqual(accepted, { ok: true, requested: true, reason: 'stop-requested' });
+  // No run exists, so nothing settled: acceptance is not completion.
+  assert.equal(s.state.activeProjectId, null);
 });

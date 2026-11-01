@@ -309,6 +309,37 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
         # lines into the same token without blocking the loop. Detached
         # in the finally below; late commands then become no-ops.
         control_listener = engine.start_control_listener(stop_token)
+
+        def report_iteration(summary) -> None:
+            """Forward one persisted iteration as an NDJSON message.
+
+            Reporting-only: the engine contains hook errors, and this
+            function never triggers requests. Malformed summaries are
+            noted on stderr and skipped so the stream stays clean.
+            """
+            try:
+                message = {
+                    "type": "adaptive_sample",
+                    "data": {
+                        "timestamp": float(summary["timestamp"]),
+                        "speed": summary["speed"],
+                        "reason": str(summary.get("reason") or ""),
+                        "next_timestamp": (
+                            None
+                            if summary.get("next_timestamp") is None
+                            else float(summary["next_timestamp"])
+                        ),
+                        "observations": int(summary["observations"]),
+                        "requests": int(summary["requests"]),
+                    },
+                }
+            except (KeyError, TypeError, ValueError) as exc:
+                print(
+                    f"Adaptive progress report skipped: {exc}",
+                    file=sys.stderr,
+                )
+                return
+            emit(message)
         try:
             with contextlib.redirect_stdout(sys.stderr):
                 adaptive_result = engine.run_adaptive_vision(
@@ -321,15 +352,25 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
                         else engine.ADAPTIVE_DEFAULT_MAX_FRAMES
                     ),
                     stop_token=stop_token,
+                    on_iteration=report_iteration,
                 )
         finally:
             engine.detach_control_listener(control_listener)
             restore_stop_handler(previous_handler)
         if adaptive_result["status"] == "failed":
+            failure = adaptive_result.get("error")
+            if not isinstance(failure, dict):
+                failure = {}
+            failure_message = failure.get("message")
             emit_error(
                 "adaptive_vision",
                 "Adaptive sampling failed "
-                f"({adaptive_result['termination']}); see worker stderr.",
+                f"({adaptive_result['termination']})"
+                + (
+                    f": {failure_message}"
+                    if failure_message
+                    else "; see worker stderr."
+                ),
             )
             return 1, {}
         adaptive_observations = count_observations(obs_dir)

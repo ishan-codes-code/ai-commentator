@@ -8,6 +8,7 @@ import {
   buildStopControlLine,
   buildWorkerArgv,
   createLineParser,
+  isValidAdaptiveSample,
   isValidWorkerMessage,
   isVisionConfigured,
   resolvePythonExecutable,
@@ -76,6 +77,89 @@ test('isValidWorkerMessage accepts only known types', () => {
   assert.equal(isValidWorkerMessage({ type: 'nope' }), false);
   assert.equal(isValidWorkerMessage(null), false);
   assert.equal(isValidWorkerMessage('started'), false);
+});
+
+function validSample(overrides = {}) {
+  return {
+    type: 'adaptive_sample',
+    data: {
+      timestamp: 12.5,
+      speed: 'HIGH',
+      reason: 'Fast motion.',
+      next_timestamp: 13,
+      observations: 3,
+      requests: 3,
+      ...overrides,
+    },
+  };
+}
+
+test('adaptive_sample accepts a complete valid payload', () => {
+  assert.equal(isValidAdaptiveSample(validSample()), true);
+  assert.equal(isValidWorkerMessage(validSample()), true);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ next_timestamp: null })),
+    true,
+  );
+  assert.equal(isValidAdaptiveSample(validSample({ reason: '' })), true);
+});
+
+test('adaptive_sample rejects an invalid speed enum', () => {
+  for (const speed of ['high', 'TURBO', '', null, 3, undefined]) {
+    assert.equal(isValidAdaptiveSample(validSample({ speed })), false);
+  }
+  assert.equal(isValidWorkerMessage(validSample({ speed: 'nope' })), false);
+});
+
+test('adaptive_sample rejects bad timestamps and counters', () => {
+  assert.equal(isValidAdaptiveSample(validSample({ timestamp: -1 })), false);
+  assert.equal(isValidAdaptiveSample(validSample({ timestamp: NaN })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ timestamp: Infinity })),
+    false,
+  );
+  assert.equal(isValidAdaptiveSample(validSample({ timestamp: '12' })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ next_timestamp: -0.5 })),
+    false,
+  );
+  assert.equal(
+    isValidAdaptiveSample(validSample({ next_timestamp: 'soon' })),
+    false,
+  );
+  assert.equal(isValidAdaptiveSample(validSample({ observations: -1 })), false);
+  assert.equal(isValidAdaptiveSample(validSample({ requests: 1.5 })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ observations: '3' })),
+    false,
+  );
+});
+
+test('adaptive_sample rejects a bad or over-long reason', () => {
+  assert.equal(isValidAdaptiveSample(validSample({ reason: null })), false);
+  assert.equal(isValidAdaptiveSample(validSample({ reason: 7 })), false);
+  assert.equal(
+    isValidAdaptiveSample(validSample({ reason: 'x'.repeat(281) })),
+    false,
+  );
+  assert.equal(
+    isValidAdaptiveSample(validSample({ reason: 'x'.repeat(280) })),
+    true,
+  );
+});
+
+test('adaptive_sample rejects missing or malformed envelopes', () => {
+  assert.equal(isValidAdaptiveSample(null), false);
+  assert.equal(isValidAdaptiveSample({ type: 'started' }), false);
+  assert.equal(isValidAdaptiveSample({ type: 'adaptive_sample' }), false);
+  assert.equal(
+    isValidAdaptiveSample({ type: 'adaptive_sample', data: null }),
+    false,
+  );
+  assert.equal(
+    isValidWorkerMessage({ type: 'adaptive_sample', data: {} }),
+    false,
+  );
 });
 
 test('resolvePythonExecutable reports the venv interpreter or its absence', () => {

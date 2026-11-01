@@ -42,6 +42,7 @@ and the tests together.
 {"type": "stage_completed", "stage": "frame_extraction", "completed": 1, "total": 5, "detail": {"frames": 3}}
 {"type": "stage_completed", "stage": "vision_analysis", "completed": 1, "total": 5, "detail": {"skipped": true, "reason": "option-skipped"}}
 {"type": "result", "data": {"video": "/v/clip.mp4", "output_dir": "/o", "stages": ["frame_extraction", "state_rebuild", "event_detection", "commentary"], "skipped": ["vision_analysis"], "mode": "full", "frames": 3, "observations": 3, "events": 0, "commentary_lines": 1, "script": "skipped", "artifacts": {"state": "/o/observations/match_state.json", "events": "/o/events/events.json", "commentary": "/o/commentary/commentary.json", "script": null}}}
+{"type": "adaptive_sample", "data": {"timestamp": 12.5, "speed": "HIGH", "reason": "Fast motion.", "next_timestamp": 13.0, "observations": 3, "requests": 3}}
 {"type": "stopped", "data": {"status": "stopped", "termination": "stop-requested", "mode": "adaptive", "observations": 2, "requests": 2}}
 {"type": "error", "stage": "state_rebuild", "message": "State rebuild failed; see worker stderr."}
 ```
@@ -60,6 +61,15 @@ Message types:
 - `stage_completed` — `stage` plus a small `detail` object with real,
   observed values only (frame/observation/event/line counts from files
   the stage actually wrote, or `{"skipped": true, "reason": ...}`).
+- `adaptive_sample` — progress message, one per validated, persisted
+  adaptive iteration (never terminal). `data` carries the scheduled
+  source-video `timestamp` (finite, ≥ 0), the validated `speed` enum
+  (`HIGH`/`NORMAL`/`LOW`), the bounded untrusted `reason` (≤ 280 chars),
+  the already-computed `next_timestamp` (`null` when the run ends at the
+  video duration), and the cumulative `observations`/`requests` counters
+  (non-negative integers). Anything outside this shape is rejected as a
+  protocol error. Only the sampling history is new: observations keep
+  flowing through the `observation-v1` files, never through this message.
 - `stopped` — terminal message of a gracefully stopped adaptive run
   (`--adaptive` only). `data` mirrors the `result` shape plus `status`
   (`"stopped"`), `termination` (`"stop-requested"`), request counts, and a
@@ -187,9 +197,12 @@ dispatched as a final message.
 - `tests/test_worker.py` covers argument parsing, invalid video paths,
   pure-NDJSON stdout, error handling, exit codes, and secret redaction,
   and `tests/test_adaptive.py` covers the adaptive stage, the `stopped`
-  terminal, flag conflicts, the adaptive protocol, and the engine stop boundaries —
+  terminal, flag conflicts, the adaptive protocol (including
+  `adaptive_sample` emission), the iteration hook, and the engine stop boundaries —
   all offline with fixture videos and observations, never paid calls.
 - `electron/test/` covers incremental parsing (split chunks, multiple
   messages per chunk, invalid lines), input validation, interpreter
-  resolution, and process cancel/cleanup — with `node:test`, no
+  resolution, process cancel/cleanup, `adaptive_sample` shape validation,
+  run-option mapping, adaptive state folding, fractional observation
+  listing, and cooperative-stop IPC/settlement — with `node:test`, no
   dependencies.

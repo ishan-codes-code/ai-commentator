@@ -1,5 +1,33 @@
 # Current state
 
+## Adaptive sampling workspace (M4.2-A/B, on `feature/adaptive-sampling-engine`, uncommitted)
+
+Electron can stop a live adaptive Python worker through a versioned
+stdin control line (`{"type":"stop","version":1}`), routed to the
+existing adaptive `StopToken` without blocking the loop; the in-flight
+request completes, validates, and persists before the worker emits
+terminal `stopped` (exit `0`). The workspace offers Adaptive Sampling
+as an explicit paid mode (key-gated, never the default) with a visible
+"Maximum vision requests" bound (UI default 10; the engine default 60
+and hard cap 10000 are untouched). Each persisted iteration emits a
+validated `adaptive_sample` message that the renderer folds into run
+state and shows as a chronological sampling activity (timestamp, speed,
+reason, next schedule); cooperative Stop shows an honest stopping state
+that settles only on the terminal message, with `stopped` distinct from
+`done`/`error`/`cancelled`. Fractional adaptive observations
+(`frame_00000.5.json`) and `adaptive_run.json` are listed and readable
+in the artifact browser (new Manifest tab with decision history).
+
+Verification: Python suite 357 tests OK (offline, fakes only);
+Electron suite 99 tests pass, 0 fail (offline, `node:test`); renderer
+production build (`vite build`) succeeds. Adaptive failures now carry
+the recorded validation reason in the terminal error message, and the
+run panel shows the recent worker log under failed runs. No paid API
+calls were made.
+The Kokonut UI component is untouched. Windows SIGTERM delivery for
+the forceful-cancel fallback was not exercised (stdin stop is
+signal-free and covered).
+
 ## Commentary Studio UI foundation
 
 The Electron renderer opens into a 900 × 650 windowed studio shell with a

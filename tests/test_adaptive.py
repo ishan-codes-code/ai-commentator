@@ -856,6 +856,161 @@ class OrchestrationTests(unittest.TestCase):
         self.assertIn("[REDACTED]", str(raised.exception))
 
 
+class IterationHookTests(unittest.TestCase):
+    def run_loop(self, speeds, max_frames, hook):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        video = write_test_video(root / "clip.mp4", seconds=7)
+        obs_dir = root / "out" / "observations"
+        client = FakeClient(echo_handler(speeds))
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(stderr):
+                result = run_adaptive_vision(
+                    video_path=video,
+                    observations_dir=obs_dir,
+                    max_frames=max_frames,
+                    client=client,
+                    on_iteration=hook,
+                )
+        return result, obs_dir, stderr.getvalue()
+
+    def test_hook_reports_each_persisted_iteration(self):
+        seen = []
+        checked = []
+
+        def hook(summary):
+            seen.append(dict(summary))
+            # The observation must already be on disk when we are told.
+            name = "frame_%s.json" % format_adaptive_timestamp(
+                summary["timestamp"]
+            )
+            checked.append((self.obs_dir / name).is_file())
+
+        self.obs_dir = None
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        video = write_test_video(root / "clip.mp4", seconds=7)
+        self.obs_dir = root / "out" / "observations"
+        client = FakeClient(echo_handler(("HIGH", "NORMAL")))
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(io.StringIO()):
+                result = run_adaptive_vision(
+                    video_path=video,
+                    observations_dir=self.obs_dir,
+                    max_frames=2,
+                    client=client,
+                    on_iteration=hook,
+                )
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(len(seen), 2)
+        # Every hook call fired only after its observation was persisted.
+        self.assertEqual(checked, [True, True])
+        # HIGH after 0 schedules 0.5; NORMAL after 0.5 schedules 3.5
+        # (the run then ends on the max-frames bound).
+        self.assertEqual(
+            [(s["timestamp"], s["speed"], s["next_timestamp"]) for s in seen],
+            [(0, "HIGH", 0.5), (0.5, "NORMAL", 3.5)],
+        )
+        for summary, expected in zip(seen, (1, 2)):
+            self.assertEqual(summary["observations"], expected)
+            self.assertEqual(summary["requests"], expected)
+            self.assertIsInstance(summary["reason"], str)
+
+    def test_hook_reports_none_next_at_video_end(self):
+        seen = []
+        result, _, _ = self.run_loop(("NORMAL",), 100, seen.append)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["termination"], "video-end")
+        self.assertEqual(
+            [(s["timestamp"], s["next_timestamp"]) for s in seen],
+            [(0, 3), (3, 6), (6, None)],
+        )
+
+    def test_hook_not_called_when_response_is_invalid(self):
+        def handle(kwargs, index):
+            return FakeRawResponse(
+                FakeCompletion([FakeChoice(FakeMessage("not json"))])
+            )
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        video = write_test_video(root / "clip.mp4", seconds=7)
+        seen = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(io.StringIO()):
+                result = run_adaptive_vision(
+                    video_path=video,
+                    observations_dir=root / "out" / "observations",
+                    max_frames=3,
+                    client=FakeClient(handle),
+                    on_iteration=seen.append,
+                )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(seen, [])
+
+    def test_late_timestamp_mismatch_reports_response_invalid(self):
+        # Two good iterations, then a response echoing an old timestamp:
+        # the run fails, keeps its partial progress, and names the
+        # expected timestamp in the recorded error.
+        def handle(kwargs, index):
+            timestamp = stamp_from_prompt(kwargs)
+            reported = timestamp if index < 2 else 0
+            return FakeRawResponse(
+                FakeCompletion(
+                    [FakeChoice(FakeMessage(adaptive_text(reported, "HIGH")))]
+                )
+            )
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        video = write_test_video(root / "clip.mp4", seconds=7)
+        obs_dir = root / "out" / "observations"
+        with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stderr(io.StringIO()):
+                result = run_adaptive_vision(
+                    video_path=video,
+                    observations_dir=obs_dir,
+                    max_frames=10,
+                    client=FakeClient(handle),
+                )
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["termination"], "response-invalid")
+        # HIGH schedules 0, 0.5, 1.0: the third response echoes 0.
+        self.assertIn("expected 1.0", result["error"]["message"])
+        # Partial progress survives the failure.
+        self.assertTrue((obs_dir / "frame_00000.json").is_file())
+        self.assertTrue((obs_dir / "frame_00000.5.json").is_file())
+        manifest = json.loads(
+            (obs_dir / "adaptive_run.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["status"], "failed")
+        self.assertIn("expected 1.0", manifest["error"]["message"])
+
+    def test_hook_exception_never_breaks_the_loop(self):
+        calls = []
+
+        def hook(summary):
+            calls.append(summary["timestamp"])
+            raise RuntimeError("boom")
+
+        result, obs_dir, stderr = self.run_loop(("NORMAL",), 2, hook)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["observations"], 2)
+        self.assertEqual(calls, [0, 3])
+        self.assertIn("continuing without it", stderr)
+        self.assertTrue((obs_dir / "frame_00003.json").is_file())
+
+    def test_no_hook_by_default(self):
+        result, _, _ = self.run_loop(("NORMAL",), 2, None)
+        self.assertEqual(result["status"], "completed")
+
+
+
 class StopTokenTests(unittest.TestCase):
     def test_stop_token_lifecycle(self):
         token = StopToken()
@@ -1189,6 +1344,75 @@ class WorkerAdaptiveTests(unittest.TestCase):
                     message["stage"], ("frame_extraction", "vision_analysis")
                 )
 
+    def test_adaptive_run_emits_sample_progress_messages(self):
+        summaries = [
+            {
+                "timestamp": 0,
+                "speed": "HIGH",
+                "reason": "Fast motion.",
+                "next_timestamp": 0.5,
+                "observations": 1,
+                "requests": 1,
+            },
+            {
+                "timestamp": 0.5,
+                "speed": "NORMAL",
+                "reason": "Steady scene.",
+                "next_timestamp": None,
+                "observations": 2,
+                "requests": 2,
+            },
+        ]
+
+        def fake_run(**kwargs):
+            hook = kwargs.get("on_iteration")
+            assert callable(hook), "worker must pass an iteration hook"
+            obs_dir = Path(kwargs["observations_dir"])
+            obs_dir.mkdir(parents=True, exist_ok=True)
+            for summary in summaries:
+                # Persist first, then report: mirrors the engine order the
+                # worker relies on (downstream stages read these files).
+                name = "frame_%s.json" % format_adaptive_timestamp(
+                    summary["timestamp"]
+                )
+                (obs_dir / name).write_text(
+                    json.dumps(observation_doc(summary["timestamp"])),
+                    encoding="utf-8",
+                )
+                hook(dict(summary))
+            return self.completed_result(
+                kwargs["video_path"], kwargs["observations_dir"]
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            video = write_test_video(root / "clip.mp4")
+            out = root / "out"
+            with mock.patch.object(
+                worker.engine, "run_adaptive_vision", side_effect=fake_run
+            ):
+                code, data, messages = self.run_pipeline_quiet(
+                    self.adaptive_args(str(video), str(out))
+                )
+        self.assertEqual(code, 0)
+        samples = [m for m in messages if m["type"] == "adaptive_sample"]
+        self.assertEqual(len(samples), 2)
+        self.assertEqual(
+            [(s["data"]["timestamp"], s["data"]["speed"]) for s in samples],
+            [(0, "HIGH"), (0.5, "NORMAL")],
+        )
+        self.assertEqual(samples[0]["data"]["reason"], "Fast motion.")
+        self.assertEqual(samples[0]["data"]["next_timestamp"], 0.5)
+        self.assertIsNone(samples[1]["data"]["next_timestamp"])
+        self.assertEqual(samples[1]["data"]["observations"], 2)
+        self.assertEqual(samples[1]["data"]["requests"], 2)
+        # Samples are progress, not terminal: they arrive while the
+        # adaptive stage is still running and the run then completes.
+        types = [m["type"] for m in messages]
+        self.assertLess(
+            types.index("adaptive_sample"), types.index("stage_completed")
+        )
+
     def test_stopped_adaptive_run_emits_stopped_and_halts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1234,7 +1458,8 @@ class WorkerAdaptiveTests(unittest.TestCase):
         for message in messages:
             self.assertIn(
                 message["type"],
-                ("started", "progress", "stage_completed", "result", "stopped", "error"),
+                ("started", "progress", "stage_completed", "adaptive_sample",
+             "result", "stopped", "error"),
             )
 
     def test_failed_adaptive_run_reports_error(self):
@@ -1263,6 +1488,10 @@ class WorkerAdaptiveTests(unittest.TestCase):
         errors = [m for m in messages if m["type"] == "error"]
         self.assertEqual(len(errors), 1)
         self.assertEqual(errors[0]["stage"], "adaptive_vision")
+        # The recorded reason travels with the terminal message so the UI
+        # can show it without digging through stderr.
+        self.assertIn("request-failed", errors[0]["message"])
+        self.assertIn("boom", errors[0]["message"])
         self.assertFalse([m for m in messages if m["type"] == "result"])
         self.assertFalse([m for m in messages if m["type"] == "stopped"])
 

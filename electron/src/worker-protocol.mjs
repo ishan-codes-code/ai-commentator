@@ -16,6 +16,7 @@ const MESSAGE_TYPES = new Set([
   'started',
   'progress',
   'stage_completed',
+  'adaptive_sample',
   'result',
   'stopped',
   'error',
@@ -114,11 +115,63 @@ function validateVideoInput(videoPath) {
   return null;
 }
 
+/**
+ * Adaptive progress contract (M4.2-B): one `adaptive_sample` message per
+ * validated, persisted iteration, emitted by `python/worker.py` from the
+ * engine's `on_iteration` hook. `ADAPTIVE_MAX_REASON_CHARS` mirrors the
+ * engine config; keep the two in sync.
+ */
+const ADAPTIVE_SPEEDS = new Set(['HIGH', 'NORMAL', 'LOW']);
+const ADAPTIVE_MAX_REASON_CHARS = 280;
+
+function isFiniteTimestamp(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isNonNegativeInt(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Strict shape check for `adaptive_sample` data. Anything outside the
+ * contract is rejected so the renderer can never render unvalidated
+ * model text as run progress.
+ */
+function isValidAdaptiveSample(message) {
+  if (!message || message.type !== 'adaptive_sample') {
+    return false;
+  }
+  const data = message.data;
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  if (!isFiniteTimestamp(data.timestamp)) {
+    return false;
+  }
+  if (!ADAPTIVE_SPEEDS.has(data.speed)) {
+    return false;
+  }
+  if (
+    typeof data.reason !== 'string' ||
+    data.reason.length > ADAPTIVE_MAX_REASON_CHARS
+  ) {
+    return false;
+  }
+  if (data.next_timestamp !== null && !isFiniteTimestamp(data.next_timestamp)) {
+    return false;
+  }
+  if (!isNonNegativeInt(data.observations) || !isNonNegativeInt(data.requests)) {
+    return false;
+  }
+  return true;
+}
+
 function isValidWorkerMessage(message) {
   return (
     message !== null &&
     typeof message === 'object' &&
-    MESSAGE_TYPES.has(message.type)
+    MESSAGE_TYPES.has(message.type) &&
+    (message.type !== 'adaptive_sample' || isValidAdaptiveSample(message))
   );
 }
 
@@ -211,6 +264,7 @@ export {
   isVisionConfigured,
   validateVideoInput,
   isValidWorkerMessage,
+  isValidAdaptiveSample,
   resolvePythonExecutable,
   resolveWorkerScript,
 };

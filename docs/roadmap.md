@@ -84,6 +84,45 @@ acceptance criteria, and what is explicitly out of scope.
   2-request live verification; see `docs/contracts/adaptive-sampling-v1.md`
   and `docs/decisions/0004-adaptive-sampling-engine.md`.
 
+## 4.2-A. Cooperative stop transport (M4.2-A)
+
+- **Goal:** let Electron ask a live adaptive worker to stop through a
+  documented stdin control channel, reusing the M4.1 `StopToken`.
+- **Dependencies:** milestone 4.1.
+- **Acceptance:** `{"type":"stop","version":1}` over the child stdin
+  reaches the token without blocking the loop; the in-flight request
+  completes, validates, and persists; the worker emits `stopped` and
+  exits `0`; `requestStop()` never claims completion early, never
+  cancels, and never arms escalation; deterministic offline tests.
+- **Out of scope:** renderer Stop UI, adaptive progress display.
+- **Status:** complete. Daemon control listener (`control.py`),
+  `requestStop()` in the process manager, `request-stop` IPC with a
+  minimal preload method, `stopped` settlement, and offline tests on
+  both sides; see `docs/contracts/worker-protocol.md` and
+  `docs/decisions/0005-stdin-cooperative-stop-transport.md`.
+
+## 4.2-B. Adaptive sampling workspace integration (M4.2-B)
+
+- **Goal:** run adaptive sampling from the desktop workspace with
+  visible sampling decisions, cooperative stop, and inspectable
+  artifacts.
+- **Dependencies:** milestones 4.1, 4.2-A.
+- **Acceptance:** explicit adaptive mode (paid, key-gated, never the
+  default) with a visible maximum-requests bound; real-time sampling
+  activity from structured worker messages (never fabricated
+  percentages); cooperative Stop with an honest stopping state that
+  settles only on the terminal message; distinct completed/stopped/
+  failed/cancelled states; fractional observations and the adaptive
+  manifest discoverable in the artifact browser; offline tests plus a
+  renderer production build.
+- **Out of scope:** TTS, OBS, live capture, new models, skip-and-continue.
+- **Status:** complete. `adaptive_sample` progress messages validated
+  main-side and folded into renderer state; mode selector with a UI
+  default of 10 maximum vision requests; sampling activity panel;
+  stop-requested flow; `stopped` project settlement; manifest tab and
+  fractional-timestamp observation listing; see
+  `docs/decisions/0006-structured-adaptive-progress.md`.
+
 ## 6. Add controlled sampling and bounded request concurrency
 
 - **Goal:** choose sampling frequency and concurrency limits by experiment.

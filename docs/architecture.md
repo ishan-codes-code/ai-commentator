@@ -11,7 +11,8 @@ The application is a native desktop app with two halves:
 
 - **Electron shell** (`electron/`): React + Vite + Tailwind renderer,
   a minimal `preload.js` bridge (`processVideo`, `cancelProcessing`,
-  `onWorkerEvent` over `contextBridge`), and a main process that owns
+  `requestStop`, plus project/artifact IPC,
+  `onWorkerEvent`, `selectVideo`, `visionStatus` over `contextBridge`), and a main process that owns
   the window, IPC routing, and the Python child-process lifecycle.
   `nodeIntegration` stays disabled; `contextIsolation` stays enabled.
 - **Python engine** (`python/`): the AI pipeline lives in the cohesive
@@ -40,7 +41,12 @@ described later in this document:
   image validation/encoding and the provider request adapter.
   `vision/observations.py` owns observation parsing and validation.
   `vision/batch.py` owns migration, single-frame execution, and batch
-  orchestration.
+  orchestration. `vision/sampling.py` owns speed validation, the
+  deterministic scheduler, and response-wrapper parsing;
+  `vision/reader.py` owns on-demand scheduled capture;
+  `vision/adaptive.py` owns the sequential loop, the run manifest, and
+  the reporting hook; `vision/control.py` owns the stdin control
+  protocol and its listener.
 - **Pipeline domains:** `state/match_state.py` owns state validation,
   application, and finalization; `state/runner.py` rebuilds snapshots.
   `events/detection.py` owns event validation, rules, and provenance;
@@ -60,7 +66,13 @@ described later in this document:
   artifacts, and media modules, with `src/project-store.mjs` preserving the
   former import path. `preload.js` remains the narrow renderer bridge.
 - **Renderer:** app sections, layout, hooks, components, primitives, and
-  libraries remain separate. `WorkspaceSection` and `ArtifactBrowser` are
+  libraries remain separate. `WorkspaceSection` owns project-bound run
+  lifecycle (including adaptive start/stop); `lib/run-options.js` maps UI
+  modes to worker options; `lib/worker-view.js` folds worker messages
+  (including `adaptive_sample`) into renderable state; the workspace
+  inspector presents run status and the sampling activity;
+  `ArtifactBrowser` surfaces observations and the adaptive manifest.
+  `WorkspaceSection` and `ArtifactBrowser` are
   still the largest feature components and retain their current presentation.
 
 Dependency direction proceeds from shared foundations to vision/state/events,
@@ -157,11 +169,14 @@ stages are paid and conditional); TTS, playback, and OBS remain planned.
 
 - Pipeline stages communicate through explicit schemas
   (see [contracts/README.md](contracts/README.md)); Electron and Python
-  communicate only through the worker protocol
+  communicate only through the worker protocol, extended with the
+  stdin control channel (main-to-worker `stop`) and per-iteration
+  `adaptive_sample` progress (worker-to-main)
   (see [contracts/worker-protocol.md](contracts/worker-protocol.md)).
 - Provider-specific code stays behind the vision adapter boundary.
 - Untrusted data (API responses, game text, model output) is validated at
   each boundary before application logic uses it.
 - Electron security boundary: the renderer reaches the main process only
-  through the three audited `preload.js` functions; API keys and
+  through the audited `preload.js` bridge (`processVideo`,
+  `cancelProcessing`, `requestStop`, worker and project IPC); API keys and
   interpreter paths never cross into the renderer.

@@ -13,6 +13,7 @@ const STATUS_LABELS = {
   completed: 'Done',
   failed: 'Error',
   cancelled: 'Cancelled',
+  stopped: 'Stopped',
 };
 
 function StageRow({ stage, info, active }) {
@@ -146,7 +147,13 @@ export default function RunPanel({
               rebuild from.
             </p>
           ) : null}
-          {run.result.mode === 'full' ? (
+          {run.result.mode === 'adaptive' ? (
+        <p className="text-[13px] text-muted-foreground">
+          Adaptive sampling finished. Counts below are measured from this
+          run&apos;s artifacts.
+        </p>
+      ) : null}
+      {run.result.mode === 'full' ? (
             <p className="text-[13px] text-muted-foreground">
               AI analysis complete. Counts below are measured from this
               run&apos;s artifacts.
@@ -157,6 +164,7 @@ export default function RunPanel({
       ) : null}
 
       {run.status === 'failed' && run.error ? (
+        <>
         <Alert variant="destructive">
           <TriangleAlert />
           <AlertTitle>
@@ -166,9 +174,30 @@ export default function RunPanel({
           </AlertTitle>
           <AlertDescription className="min-w-0 [overflow-wrap:anywhere]">{run.error.message}</AlertDescription>
         </Alert>
+        {Array.isArray(run.workerLogs) && run.workerLogs.length > 0 ? (
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className="text-[11px] text-muted-foreground">Worker log (most recent last)</p>
+            <pre className="max-h-32 min-w-0 overflow-auto rounded-sm border border-border bg-background p-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+              {run.workerLogs.slice(-8).join("\n")}
+            </pre>
+          </div>
+        ) : null}
+        </>
       ) : null}
 
-      {run.status === 'cancelled' ? (
+      {run.status === 'stopped' && run.result ? (
+      <>
+        <Separator />
+        <p className="text-[13px] text-muted-foreground">
+          Adaptive sampling stopped before completion. Validated
+          observations and the run manifest are preserved; inspect them in
+          Artifacts.
+        </p>
+        <ResultRows result={run.result} />
+      </>
+    ) : null}
+
+    {run.status === 'cancelled' ? (
         <p className="text-[13px] text-muted-foreground">
           Processing was cancelled. No partial results are shown; start
           again when ready.
