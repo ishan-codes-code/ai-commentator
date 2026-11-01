@@ -17,6 +17,7 @@ const MESSAGE_TYPES = new Set([
   'progress',
   'stage_completed',
   'result',
+  'stopped',
   'error',
 ]);
 
@@ -162,6 +163,19 @@ function buildWorkerArgv(script, videoPath, opts = {}) {
   }
   if (options.withScript) {
     argv.push('--with-script');
+  }
+  if (options.adaptive) {
+    argv.push('--adaptive');
+  }
+  if (options.adaptiveMaxFrames !== undefined && options.adaptiveMaxFrames !== null) {
+    const maxFrames =
+      typeof options.adaptiveMaxFrames === 'number'
+        ? options.adaptiveMaxFrames
+        : Number(String(options.adaptiveMaxFrames).trim());
+    if (!Number.isInteger(maxFrames) || maxFrames < 1) {
+      throw new Error('adaptiveMaxFrames must be a positive integer.');
+    }
+    argv.push('--adaptive-max-frames', String(maxFrames));
   }
   return argv;
 }

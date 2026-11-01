@@ -68,6 +68,22 @@ acceptance criteria, and what is explicitly out of scope.
   suppressed. Real-tree run: 5 accepted, 0 emitted — documented as the
   honest result for the current evidence.
 
+## 4.1. LLM-guided adaptive sampling (M4.1)
+
+- **Goal:** sample recorded video adaptively: one captured frame, one
+  vision request returning a validated observation plus a sampling
+  decision, and the next timestamp scheduled from that decision.
+- **Dependencies:** milestones 2–5 (validation, batch, state, events).
+- **Acceptance:** sequential loop starts at 0, uses HIGH/NORMAL/LOW to
+  schedule the next capture, persists `observation-v1` atomically,
+  never spends more than one paid call per frame, stops gracefully with
+  partial progress, and keeps batch behavior unchanged.
+- **Out of scope:** live capture, optical-flow heuristics, multi-frame
+  batching, parallel requests, UI triggers, TTS.
+- **Status:** complete. Implemented with 62 offline tests plus a bounded
+  2-request live verification; see `docs/contracts/adaptive-sampling-v1.md`
+  and `docs/decisions/0004-adaptive-sampling-engine.md`.
+
 ## 6. Add controlled sampling and bounded request concurrency
 
 - **Goal:** choose sampling frequency and concurrency limits by experiment.

@@ -2,7 +2,7 @@
  * Pure mapping from worker-protocol messages to run view state.
  *
  * The worker speaks NDJSON (`started`, `progress`, `stage_completed`,
- * `result`, `error`; see `docs/contracts/worker-protocol.md`) plus the
+ * `result`, `stopped`, `error`; see `docs/contracts/worker-protocol.md`) plus the
  * two renderer-synthesized messages (`worker-log`, `worker-exit`).
  * This module turns that stream into renderable state with no side
  * effects: no IPC, no timers, no mutation of its inputs.
@@ -11,6 +11,7 @@
 export const STAGE_ORDER = [
   'frame_extraction',
   'vision_analysis',
+  'adaptive_vision',
   'state_rebuild',
   'event_detection',
   'commentary',
@@ -20,6 +21,7 @@ export const STAGE_ORDER = [
 export const STAGE_LABELS = {
   frame_extraction: 'Frame extraction',
   vision_analysis: 'Vision analysis',
+  adaptive_vision: 'Adaptive vision',
   state_rebuild: 'Match-state reconstruction',
   event_detection: 'Event detection',
   commentary: 'Commentary generation',
@@ -47,6 +49,7 @@ const DETAIL_METRICS = [
   ['observations', 'observations'],
   ['events', 'events'],
   ['lines', 'lines'],
+  ['requests', 'requests'],
 ];
 
 /**
@@ -143,6 +146,15 @@ export function applyWorkerMessage(state, message) {
           },
         },
         currentStage: null,
+      };
+    }
+    case 'stopped': {
+      return {
+        ...state,
+        status: 'stopped',
+        currentStage: null,
+        result: message.data ?? null,
+        error: null,
       };
     }
     case 'result': {

@@ -10,6 +10,7 @@ from ..config import (
     FRAME_FILENAME_RE,
     FRAMES_DIR,
     MAX_VISION_BATCH_JOBS,
+    ADAPTIVE_OBSERVATION_FILENAME_RE,
     OBSERVATION_FILENAME_RE,
     OBSERVATIONS_DIR,
     INTERVAL,
@@ -145,14 +146,23 @@ def observation_path_for_frame(
     return obs_dir / (Path(frame_path).stem + ".json")
 
 
-def parse_observation_timestamp(name: str) -> int | None:
+def parse_observation_timestamp(name: str) -> int | float | None:
     """Return the numeric timestamp for an observation filename, else None.
 
-    Matches only the ``frame_<timestamp>.json`` naming; anything else
+    Matches the ``frame_<timestamp>.json`` naming with an integer stamp
+    (``frame_00003.json`` -> 3) or a fractional adaptive stamp
+    (``frame_00000.5.json`` -> 0.5); anything else
     (including the ``match_state.json`` snapshot) is not a stored
     observation.
     """
     match = OBSERVATION_FILENAME_RE.match(name)
+    if match is not None:
+        return int(match.group(1))
+    match = ADAPTIVE_OBSERVATION_FILENAME_RE.match(name)
+    stamped = match.group(1) if match is not None else None
+    if stamped is not None and "." in stamped:
+        # Fractional adaptive timestamp (e.g. frame_00000.5.json).
+        return float(stamped)
     if match is None:
         return None
     return int(match.group(1))

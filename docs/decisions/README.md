@@ -21,3 +21,4 @@ not need an ADR; record choices that constrain future work.
 - [0001 — Docker-first development](0001-docker-first-development.md)
 - [0002 — Native Electron and Python development](0002-native-electron-python.md)
 - [0003 — Modular engine and Electron main process](0003-modular-engine-and-electron-process.md)
+- [0004 — Adaptive LLM-guided sampling engine](0004-adaptive-sampling-engine.md)

@@ -35,6 +35,19 @@ from ai_commentator.commentary.validation import (
     validate_commentary,
 )
 from ai_commentator.config import (
+    ADAPTIVE_DEFAULT_MAX_FRAMES,
+    ADAPTIVE_DEFAULT_SPEED,
+    ADAPTIVE_HARD_MAX_FRAMES,
+    ADAPTIVE_INTERVALS,
+    ADAPTIVE_MAX_INTERVAL,
+    ADAPTIVE_MAX_REASON_CHARS,
+    ADAPTIVE_MIN_INTERVAL,
+    ADAPTIVE_OBSERVATION_FILENAME_RE,
+    ADAPTIVE_REQUEST_TIMEOUT_S,
+    ADAPTIVE_RUN_MANIFEST_FILENAME,
+    ADAPTIVE_RUN_SCHEMA_VERSION,
+    ADAPTIVE_SPEEDS,
+    ADAPTIVE_TIMESTAMP_PRECISION,
     BASETEN_BASE_URL,
     BASETEN_MODEL,
     COMMENTARY_DIR,
@@ -138,6 +151,8 @@ from ai_commentator.storage import (
     write_match_state,
     write_observation_json,
 )
+from ai_commentator.vision import adaptive as _adaptive
+from ai_commentator.vision.adaptive import StopToken, parse_max_frames_argument
 from ai_commentator.vision import batch as _vision_batch
 from ai_commentator.vision.batch import (
     migrate_observations,
@@ -146,13 +161,19 @@ from ai_commentator.vision.batch import (
     process_batch_frame,
 )
 from ai_commentator.vision.client import (
+    analyze_adaptive_frame,
     analyze_frame,
+    build_adaptive_vision_prompt,
     build_image_data_url,
+    build_previous_context,
     build_vision_prompt,
+    encode_frame_image,
     ensure_observation_timestamp,
     extract_response_text,
     load_frame_image,
+    request_adaptive_text,
     request_observation_text,
+    truncate_context_text,
     vision_frame_timestamp,
 )
 from ai_commentator.vision.frames import (
@@ -173,6 +194,15 @@ from ai_commentator.vision.observations import (
     _require_non_empty_string,
     parse_observation,
     validate_observation,
+)
+from ai_commentator.vision.reader import ScheduledVideoReader
+from ai_commentator.vision.sampling import (
+    AdaptiveScheduler,
+    format_adaptive_timestamp,
+    observation_path_for_timestamp,
+    parse_adaptive_response,
+    validate_intervals,
+    validate_sampling,
 )
 from openai import OpenAI
 
@@ -211,6 +241,12 @@ def run_vision_batch(*args, **kwargs):
     """Compatibility wrapper preserving the legacy OpenAI patch point."""
     _vision_batch.OpenAI = OpenAI
     return _vision_batch.run_vision_batch(*args, **kwargs)
+
+
+def run_adaptive_vision(*args, **kwargs):
+    """Compatibility wrapper preserving the legacy OpenAI patch point."""
+    _adaptive.OpenAI = OpenAI
+    return _adaptive.run_adaptive_vision(*args, **kwargs)
 
 
 if __name__ == "__main__":

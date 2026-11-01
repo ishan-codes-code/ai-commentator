@@ -117,6 +117,36 @@ test('resolveWorkerScript reports presence or absence', () => {
   }
 });
 
+test('stopped is a known worker message type', () => {
+  assert.equal(isValidWorkerMessage({ type: 'stopped', data: {} }), true);
+});
+
+test('buildWorkerArgv passes adaptive flags', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', {
+      adaptive: true,
+      adaptiveMaxFrames: 3,
+    }),
+    ['worker.py', 'clip.mp4', '--adaptive', '--adaptive-max-frames', '3'],
+  );
+});
+
+test('buildWorkerArgv rejects non-positive adaptiveMaxFrames', () => {
+  for (const adaptiveMaxFrames of [0, -2, 2.5, 'many', NaN]) {
+    assert.throws(
+      () => buildWorkerArgv('worker.py', 'clip.mp4', { adaptiveMaxFrames }),
+      /positive integer/,
+    );
+  }
+});
+
+test('buildWorkerArgv omits adaptive flags unless requested', () => {
+  assert.deepEqual(
+    buildWorkerArgv('worker.py', 'clip.mp4', { skipVision: true }),
+    ['worker.py', 'clip.mp4', '--skip-vision'],
+  );
+});
+
 test('buildWorkerArgv passes explicit limit for AI runs', () => {
   assert.deepEqual(
     buildWorkerArgv('worker.py', 'clip.mp4', {

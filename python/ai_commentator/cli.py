@@ -59,6 +59,14 @@ def run_cli(engine, argv=None):
         "output/script/script.json (one bounded text-only model call; "
         "no template fallback).",
     )
+    mode.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="Sample the video adaptively: capture one frame at a time, "
+        "request one vision observation plus a sampling decision per "
+        "frame, and schedule the next timestamp from that decision "
+        "(paid, bounded by --adaptive-max-frames).",
+    )
     parser.add_argument(
         "--limit",
         type=engine.parse_limit_argument,
@@ -79,6 +87,14 @@ def run_cli(engine, argv=None):
         metavar="J",
         help="Maximum concurrent vision requests for --vision-batch "
         f"(integer 1-{engine.MAX_VISION_BATCH_JOBS}, default {engine.DEFAULT_VISION_BATCH_JOBS}).",
+    )
+    parser.add_argument(
+        "--adaptive-max-frames",
+        type=engine.parse_max_frames_argument,
+        default=None,
+        metavar="N",
+        help="Maximum sampled frames for --adaptive (positive integer, "
+        f"default {engine.ADAPTIVE_DEFAULT_MAX_FRAMES}).",
     )
     parser.add_argument(
         "--video",
@@ -105,6 +121,8 @@ def run_cli(engine, argv=None):
         parser.error("--force requires --vision-batch.")
     if args.jobs is not None and not args.vision_batch:
         parser.error("--jobs requires --vision-batch.")
+    if args.adaptive_max_frames is not None and not args.adaptive:
+        parser.error("--adaptive-max-frames requires --adaptive.")
     offline_mode = (
         args.vision_test
         or args.vision_batch
@@ -114,8 +132,9 @@ def run_cli(engine, argv=None):
         or args.generate_commentary
         or args.commentary_write
         or args.generate_script
+        or args.adaptive
     )
-    if args.video is not None and offline_mode:
+    if args.video is not None and offline_mode and not args.adaptive:
         parser.error("--video only applies to default frame extraction.")
     
     # Resolve the output tree. None means "use the project-root defaults";
@@ -204,6 +223,24 @@ def run_cli(engine, argv=None):
                 script_path=script_path,
                 frames_dir=frames_dir,
             )
+        )
+    elif args.adaptive:
+        result = engine.run_adaptive_vision(
+            video_path=args.video,
+            observations_dir=obs_dir,
+            max_frames=(
+                args.adaptive_max_frames
+                if args.adaptive_max_frames is not None
+                else engine.ADAPTIVE_DEFAULT_MAX_FRAMES
+            ),
+        )
+        print(
+            f"Adaptive run {result['status']}: {result['observations']} "
+            f"observation(s) from {result['requests']} request(s), "
+            f"termination={result['termination']}."
+        )
+        raise SystemExit(
+            0 if result["status"] in ("completed", "stopped") else 1
         )
     else:
         engine.main(video_path=args.video, frames_dir=frames_dir)

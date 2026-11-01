@@ -442,8 +442,51 @@ thread.)
   `--limit 10` run on `gameplay/match.mp4`: 66 frames, 10/10
   observations, state rebuilt, 0 events (honest), 8 commentary lines.
 
+## Adaptive sampling engine (M4.1, on `feature/adaptive-sampling-engine`, uncommitted)
+
+- Sequential LLM-guided loop replacing fixed extraction for the adaptive
+  path: `ScheduledVideoReader` (one open `VideoCapture`, on-demand
+  scheduled captures, always released) → one real Baseten vision request
+  carrying at most the previous validated observation → strict wrapper
+  validation (`observation-v1` half plus separate HIGH/NORMAL/LOW
+  sampling half) → atomic observation write → scheduler maps the label
+  to the next timestamp (HIGH 0.5s, NORMAL 3.0s, LOW 6.0s; first sample
+  at 0; terminates at video end or `max_frames`). No retries, no repair
+  calls, one finite SDK timeout, at most one paid request per frame.
+- Invalid sampling falls back to NORMAL with diagnostics and never
+  discards a valid observation; malformed/observation-invalid responses
+  fail the run without writing. Adaptive metadata (speeds, bounded
+  reasons, run status) lives only in `output/observations/adaptive_run.json`
+  (`adaptive-run-v1`); `observation-v1` is unchanged. Fractional stamps
+  use `frame_00000.5.json` (parsed as float); integer names are untouched.
+- Cooperative stop: `StopToken` checked before each capture, before each
+  paid request, and after each persisted observation. An in-flight
+  request always completes and persists; the run then ends `stopped`.
+  The worker maps SIGTERM to the token in adaptive mode only and emits a
+  `stopped` terminal message (exit 0); other modes are unchanged.
+  Electron parses/forwards `stopped` with no new controls, so a
+  cancel-initiated graceful stop still settles the UI as `cancelled`.
+- CLI: `python/main.py --adaptive [--adaptive-max-frames N]`
+  (`--video` allowed); worker: `--adaptive [--adaptive-max-frames N]`
+  with `adaptive_vision` stage, `adaptive` run mode, conflict rejections
+  (exit 2), and unchanged downstream stages. Batch extraction, batch
+  vision, state, events, commentary, and script behavior are preserved.
+- Verified: 323/323 Python tests (261 pre-existing plus 62 new adaptive
+  tests covering scheduler, validation, reader, orchestration, all six
+  stop stages, worker protocol, and CLI); Electron suites pass except
+  pre-existing sandbox temp-dir permission failures unrelated to this
+  change (see task report). Real API check: 2 paid requests total (one
+  CLI, one worker end-to-end on a 4 s synthetic probe) — HTTP 200,
+  wrapper validated, observation persisted, LOW decision correctly ended
+  the run at video end, manifest complete, no secrets in any stream.
+- Limitations: OpenCV timestamp seeks are backend-dependent (observation
+  timestamps name the scheduled time, not a frame-perfect decode claim);
+  Windows cancel still terminates immediately (no graceful SIGTERM);
+  failure terminates the run (no skip-and-continue yet); no UI trigger
+  for adaptive runs or dedicated stop control exists yet.
+
 ## Recommended next milestone
 
-Roadmap milestone 9 (TTS and audio playback), then adaptive frame
-sampling (explicit follow-up; not started).
+Roadmap milestone 9 (TTS and audio playback), then adaptive
+sampling follow-ups (M4.2: UI-triggered adaptive runs, bounded skip-and-continue, dedicated stop control).
 See [roadmap.md](roadmap.md).

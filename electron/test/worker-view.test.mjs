@@ -15,12 +15,13 @@ import { extensionOf, fileNameOf, fileUrlOf, formatBytes, projectMediaUrl, timeA
 test('stageLabel maps known stages and passes unknown through', () => {
   assert.equal(stageLabel('frame_extraction'), 'Frame extraction');
   assert.equal(stageLabel('vision_analysis'), 'Vision analysis');
+  assert.equal(stageLabel('adaptive_vision'), 'Adaptive vision');
   assert.equal(stageLabel('state_rebuild'), 'Match-state reconstruction');
   assert.equal(stageLabel('event_detection'), 'Event detection');
   assert.equal(stageLabel('commentary'), 'Commentary generation');
   assert.equal(stageLabel('script'), 'Script generation');
   assert.equal(stageLabel('mystery_stage'), 'mystery_stage');
-  assert.equal(Object.keys(STAGE_LABELS).length, 6);
+  assert.equal(Object.keys(STAGE_LABELS).length, 7);
 });
 
 test('started resets to a fresh processing state', () => {
@@ -79,6 +80,34 @@ test('stage_completed records done and skipped honestly', () => {
   });
   assert.equal(state.stages.frame_extraction.status, 'done');
   assert.equal(state.stages.frame_extraction.detail.frames, 3);
+});
+
+test('stopped stores partial results without settling the run', () => {
+  const data = {
+    status: 'stopped',
+    termination: 'stop-requested',
+    observations: 2,
+    requests: 2,
+  };
+  const running = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'Processing clip.mp4',
+  });
+  const state = applyWorkerMessage(running, {
+    type: 'stopped',
+    data,
+  });
+  assert.equal(state.status, 'stopped');
+  assert.deepEqual(state.result, data);
+  assert.equal(state.error, null);
+  assert.equal(state.settled, false);
+  const exited = applyWorkerMessage(state, {
+    type: 'worker-exit',
+    code: 0,
+    cancelled: true,
+  });
+  assert.equal(exited.status, 'cancelled');
+  assert.equal(exited.settled, true);
 });
 
 test('result stores data and ignores invented fields', () => {
@@ -254,6 +283,7 @@ test('stageDetailText summarizes only real reported counts', () => {
   assert.equal(stageDetailText({ observations: 10 }), '10 observations');
   assert.equal(stageDetailText({ events: 2 }), '2 events');
   assert.equal(stageDetailText({ lines: 7 }), '7 lines');
+  assert.equal(stageDetailText({ requests: 3 }), '3 requests');
   assert.equal(
     stageDetailText({ skipped: true, reason: 'no-observations' }),
     'No observations available',

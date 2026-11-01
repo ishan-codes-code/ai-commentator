@@ -20,6 +20,12 @@ Defined contracts:
   observation of a single frame (roadmap milestones 2–3). Includes why
   server-side schema enforcement is unavailable for our model and why
   validation happens in code.
+- [adaptive-sampling-v1.md](adaptive-sampling-v1.md) — the LLM-guided
+  sequential sampling loop (roadmap milestone M4.1): one wrapper
+  response with a validated `observation-v1` half plus a separately
+  validated sampling decision, the HIGH/NORMAL/LOW scheduler, the
+  fractional observation filename form, the `adaptive_run.json`
+  manifest, and cooperative stop semantics.
 - [match-state-v1.md](match-state-v1.md) — the rolling match-state snapshot
   rebuilt from validated observations (roadmap milestone 4): fact identity,
   provenance, statuses, update semantics, determinism, and what the
