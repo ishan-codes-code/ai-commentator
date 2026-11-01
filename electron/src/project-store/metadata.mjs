@@ -9,7 +9,7 @@ export const PROJECTS_DIR_NAME = 'projects';
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const MAX_NAME_LENGTH = 100;
 const PATCHABLE_FIELDS = new Set(['processingStatus', 'lastOpenedAt']);
-const PROCESSING_STATUSES = new Set(['idle', 'processing', 'done', 'error', 'cancelled', 'interrupted']);
+const PROCESSING_STATUSES = new Set(['idle', 'processing', 'done', 'stopped', 'error', 'cancelled', 'interrupted']);
 
 export function getProjectsRoot(userDataPath) {
   return path.join(userDataPath, PROJECTS_DIR_NAME);

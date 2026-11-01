@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
+  buildStopControlLine,
   buildWorkerArgv,
   createLineParser,
   isValidWorkerMessage,
@@ -12,6 +13,7 @@ import {
   resolvePythonExecutable,
   resolveWorkerScript,
   validateVideoInput,
+  WORKER_CONTROL_VERSION,
 } from '../src/worker-protocol.mjs';
 
 test('parser assembles a message split across chunks', () => {
@@ -115,6 +117,12 @@ test('resolveWorkerScript reports presence or absence', () => {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('control channel carries a versioned stop line', () => {
+  assert.equal(WORKER_CONTROL_VERSION, 1);
+  assert.equal(buildStopControlLine(), '{"type":"stop","version":1}\n');
+  assert.deepEqual(JSON.parse(buildStopControlLine()), { type: 'stop', version: 1 });
 });
 
 test('stopped is a known worker message type', () => {

@@ -110,6 +110,25 @@ test('stopped stores partial results without settling the run', () => {
   assert.equal(exited.settled, true);
 });
 
+test('worker-exit after stopped settles without rewriting the status', () => {
+  const running = applyWorkerMessage(createInitialRunState(), {
+    type: 'started',
+    message: 'Processing clip.mp4',
+  });
+  const stopped = applyWorkerMessage(running, {
+    type: 'stopped',
+    data: { status: 'stopped' },
+  });
+  const exited = applyWorkerMessage(stopped, {
+    type: 'worker-exit',
+    code: 0,
+    cancelled: false,
+  });
+  assert.equal(exited.status, 'stopped');
+  assert.equal(exited.settled, true);
+  assert.equal(exited.currentStage, null);
+});
+
 test('result stores data and ignores invented fields', () => {
   const data = {
     frames: 3,

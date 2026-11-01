@@ -18,6 +18,19 @@ and the tests together.
   newline-delimited (NDJSON). Engine diagnostics and legacy `print` output
   are redirected to **stderr** so stdout stays parseable even though the
   engine itself prints freely.
+- The child is spawned with `stdio: ['pipe', 'pipe', 'pipe']`, owned as
+  follows: **stdout** carries only protocol messages (Electron reads);
+  **stderr** carries diagnostics (Electron forwards); **stdin** carries
+  only control messages (Electron writes, the worker reads). The process
+  manager owns stdin writes; the renderer never touches the child.
+- **Control messages** are one newline-delimited JSON object per line:
+  `{"type":"stop","version":1}` is version 1's only command, built by
+  `buildStopControlLine()` and parsed by
+  `python/ai_commentator/vision/control.py`. The worker ignores blank
+  lines, rejects malformed JSON, unknown commands, and unsupported
+  versions with a short stderr note (never echoing the payload), and
+  ends its reader quietly on EOF. Nothing but `stop` version 1 may
+  travel this channel: no paths, no shell, no code, no secrets.
 - The worker never prints secrets. `BASETEN_API_KEY` is read from the
   environment and its value never appears in any message.
 
@@ -86,6 +99,32 @@ as conflicts (exit `2`). A completed adaptive stage reports
 Electron also synthesizes two renderer-only messages that never appear
 on the worker's stdout: `{type: "worker-log", text}` for stderr output
 and `{type: "worker-exit", code, signal, cancelled}` when the child ends.
+
+## Cooperative stop vs forceful cancellation
+
+- Cooperative stop (`requestStop()` → stdin `stop` line → the worker's
+  existing adaptive `StopToken`): the in-flight vision request completes,
+  validates, and persists; the run halts before the next capture and
+  emits terminal `stopped` with exit `0`. The manager reports whether
+  the line was *sent* (`{requested, reason}`); completion is observed
+  through `stopped` and the child's actual exit, never claimed early.
+  Reasons: `no-active-job`, `stdin-unavailable`, `already-requested`
+  (idempotent repeat), `stop-requested`, `write-failed` (retryable).
+  Cooperative stop never marks the record cancelled and never starts
+  the SIGTERM/SIGKILL escalation.
+- Forceful cancellation (`cancel()`): SIGTERM, then SIGKILL after the
+  grace period; the child ends with `cancelled: true` and the run
+  settles as `cancelled`. This remains the shutdown and fallback path,
+  and still works after a cooperative request.
+- Terminal settlement: `done` (exit `0` after `result`), `stopped`
+  (exit `0` after `stopped`; partial observations and the run manifest
+  survive), `error` (a stage failed), `cancelled` (forceful cancel),
+  `interrupted` (app quit mid-run). A stop is never reported as
+  `cancelled`, and `stopped` never counts as a successful completion.
+- Platform notes: stdin delivery works identically on Windows and
+  POSIX (it is the Windows-safe path — no signals involved). The
+  worker's SIGTERM-to-token mapping from M4.1 stays as a POSIX fallback
+  inside adaptive runs only; every other mode keeps existing behavior.
 
 ## Validation and exit codes
 

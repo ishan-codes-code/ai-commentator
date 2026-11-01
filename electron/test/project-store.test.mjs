@@ -223,6 +223,24 @@ test('settle only transitions out of processing, never to success', (t) => {
   assert.throws(() => settleProjectRun(base, '../evil', 'error'), /Invalid project id/);
 });
 
+test('stopped settles a processing run as a terminal state', (t) => {
+  const { base, cleanup } = makeUserData();
+  t.after(cleanup);
+  const video = makeSourceVideo(path.join(base, 'incoming'));
+  const running = createProject(base, { name: 'Stopping', sourcePath: video });
+  updateProject(base, running.id, { processingStatus: 'processing' });
+
+  const settled = settleProjectRun(base, running.id, 'stopped');
+  assert.equal(settled.settled, true);
+  assert.equal(settled.project.processingStatus, 'stopped');
+  assert.equal(getProject(base, running.id).processingStatus, 'stopped');
+
+  // A stopped run is terminal: settling again changes nothing.
+  const repeat = settleProjectRun(base, running.id, 'done');
+  assert.equal(repeat.settled, false);
+  assert.equal(repeat.project.processingStatus, 'stopped');
+});
+
 test('reconcile moves only stale processing projects to interrupted', (t) => {
   const { base, cleanup } = makeUserData();
   t.after(cleanup);

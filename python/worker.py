@@ -305,6 +305,10 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
         args.skip_vision = True
         stop_token = engine.StopToken()
         previous_handler = install_stop_handler(stop_token)
+        # Stdin control channel (M4.2-A): a daemon thread pumps control
+        # lines into the same token without blocking the loop. Detached
+        # in the finally below; late commands then become no-ops.
+        control_listener = engine.start_control_listener(stop_token)
         try:
             with contextlib.redirect_stdout(sys.stderr):
                 adaptive_result = engine.run_adaptive_vision(
@@ -319,6 +323,7 @@ def run_pipeline(args: argparse.Namespace) -> tuple[int, dict]:
                     stop_token=stop_token,
                 )
         finally:
+            engine.detach_control_listener(control_listener)
             restore_stop_handler(previous_handler)
         if adaptive_result["status"] == "failed":
             emit_error(
@@ -572,7 +577,9 @@ def main(argv: list[str] | None = None) -> int:
         traceback.print_exc(file=sys.stderr)
         emit_error("worker", f"Unexpected worker failure: {exc}")
         return 1
-    if code == 0:
+    if code == 0 and data.get("status") != "stopped":
+        # A gracefully stopped run already emitted its terminal `stopped`
+        # message; emitting `result` too would blur the terminal state.
         emit({"type": "result", "data": data})
     return code
 

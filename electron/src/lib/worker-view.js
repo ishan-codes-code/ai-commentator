@@ -188,7 +188,7 @@ export function applyWorkerMessage(state, message) {
       if (message.cancelled) {
         return { ...state, status: 'cancelled', currentStage: null, settled: true };
       }
-      if (state.status === 'completed' || state.status === 'failed') {
+      if (state.status === 'completed' || state.status === 'failed' || state.status === 'stopped') {
         return { ...state, settled: true };
       }
       return {

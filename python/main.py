@@ -195,6 +195,15 @@ from ai_commentator.vision.observations import (
     parse_observation,
     validate_observation,
 )
+from ai_commentator.vision.control import (
+    CONTROL_PROTOCOL_VERSION,
+    CONTROL_TYPE_STOP,
+    MAX_CONTROL_LINE_CHARS,
+    ControlListener,
+    detach_control_listener,
+    interpret_control_line,
+    start_control_listener,
+)
 from ai_commentator.vision.reader import ScheduledVideoReader
 from ai_commentator.vision.sampling import (
     AdaptiveScheduler,

@@ -22,6 +22,19 @@ const MESSAGE_TYPES = new Set([
 ]);
 
 /**
+ * Stdin control-channel contract (M4.2-A): one newline-delimited JSON
+ * message per command, mirroring `CONTROL_PROTOCOL_VERSION` in
+ * `python/ai_commentator/vision/control.py`. Version 1 carries a single
+ * command, `stop`, which the worker routes to the adaptive StopToken.
+ * Nothing else may travel this channel: no paths, no shell, no code.
+ */
+const WORKER_CONTROL_VERSION = 1;
+
+function buildStopControlLine() {
+  return JSON.stringify({ type: 'stop', version: WORKER_CONTROL_VERSION }) + '\n';
+}
+
+/**
  * Incremental newline-delimited JSON parser. Chunk boundaries from the
  * child process rarely align with message boundaries, so callers feed
  * raw stdout data and receive complete messages via onMessage.
@@ -191,6 +204,8 @@ function resolveWorkerScript(repoRoot) {
 export {
   SUPPORTED_VIDEO_EXTENSIONS,
   MESSAGE_TYPES,
+  WORKER_CONTROL_VERSION,
+  buildStopControlLine,
   buildWorkerArgv,
   createLineParser,
   isVisionConfigured,

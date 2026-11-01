@@ -2,11 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 // Minimal, audited bridge between the renderer and the main process.
 // The renderer never sees Node.js, the Python interpreter, or API keys:
-// it can only start/cancel a processing job and listen to worker events.
+// it can only start a processing job, request a cooperative stop,
+// force-cancel it, and listen to worker events.
 contextBridge.exposeInMainWorld('api', {
   processVideo: (videoPath, options) =>
     ipcRenderer.invoke('process-video', videoPath, options ?? {}),
   cancelProcessing: () => ipcRenderer.invoke('cancel-processing'),
+  requestStop: () => ipcRenderer.invoke('request-stop'),
   visionStatus: () => ipcRenderer.invoke('vision-status'),
   selectVideo: () => ipcRenderer.invoke('select-video'),
   listProjects: () => ipcRenderer.invoke('list-projects'),
