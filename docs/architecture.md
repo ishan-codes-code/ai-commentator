@@ -65,6 +65,13 @@ described later in this document:
   and their respective IPC handlers. Project storage is split into metadata,
   artifacts, and media modules, with `src/project-store.mjs` preserving the
   former import path. `preload.js` remains the narrow renderer bridge.
+- **Application settings (M5):** `src/settings-store.mjs` validates and
+  atomically writes non-secret global settings under `userData`;
+  `src/main/ipc/settings.js` owns settings/provider IPC. Provider keys are
+  encrypted by Electron `safeStorage` into a separate file and are never
+  returned to the renderer. The Python worker receives provider settings and
+  the key only in its child environment. `python/provider_setup.py` performs
+  user-initiated OpenAI-compatible connection/model/image-capability checks.
 - **Renderer:** app sections, layout, hooks, components, primitives, and
   libraries remain separate. `WorkspaceSection` owns project-bound run
   lifecycle (including adaptive start/stop); `lib/run-options.js` maps UI
@@ -174,6 +181,9 @@ stages are paid and conditional); TTS, playback, and OBS remain planned.
   `adaptive_sample` progress (worker-to-main)
   (see [contracts/worker-protocol.md](contracts/worker-protocol.md)).
 - Provider-specific code stays behind the vision adapter boundary.
+- User-editable prompt preferences are stylistic additions only; schema
+  validation, evidence gating, uncertainty language, and script validation
+  remain deterministic and cannot be disabled by those preferences.
 - Untrusted data (API responses, game text, model output) is validated at
   each boundary before application logic uses it.
 - Electron security boundary: the renderer reaches the main process only

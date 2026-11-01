@@ -15,6 +15,7 @@ from ..config import (
     WRITER_MAX_CLAIMS,
     WRITER_MAX_EVIDENCE_CHARS,
     WRITER_MAX_HISTORY_LINES,
+    stylistic_prompt_suffix,
 )
 from ..errors import ObservationError, WriterAPIError
 from ..events.detection import _feed_name_tokens
@@ -167,7 +168,7 @@ def build_writer_prompt(claims: list, history_texts: list) -> str:
     if history_texts:
         parts.append("Already said (do not repeat this information): ")
         parts.append(" | ".join(history_texts[-WRITER_MAX_HISTORY_LINES:]))
-    return "".join(parts)
+    return "".join(parts) + stylistic_prompt_suffix()
 
 
 def request_writer_text(client, prompt: str, api_key: str | None = None) -> str:

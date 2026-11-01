@@ -1,11 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, net, protocol } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, safeStorage } from 'electron';
+import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 import { createWorkerManager } from './python-worker.mjs';
+import { resolvePythonExecutable } from './worker-protocol.mjs';
 import { registerProjectIpc } from './main/ipc/projects.js';
 import { registerProcessingIpc } from './main/ipc/processing.js';
+import { registerSettingsIpc } from './main/ipc/settings.js';
 import { registerProjectMediaProtocol } from './main/media-protocol.js';
 import { createMainWindow } from './main/window.js';
 import { reconcileInterruptedRuns, resolveProjectMedia } from './project-store.mjs';
@@ -43,6 +46,34 @@ function repoRoot() {
 const workerManager = createWorkerManager();
 let mainWindow = null;
 const processingState = { activeProjectId: null, appQuitting: false };
+
+function spawnSetup({ operation, provider, key }) {
+  const root = repoRoot();
+  const { executable } = resolvePythonExecutable(root);
+  if (!executable) return Promise.resolve({ ok: false, error: 'Python virtual environment is not configured.' });
+  return new Promise((resolve) => {
+    const child = spawn(executable, [path.join(root, 'python', 'provider_setup.py'), operation,
+      '--base-url', provider.baseUrl, '--model', provider.model], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { PATH: process.env.PATH ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? '',
+        AI_COMMENTATOR_PROVIDER_API_KEY: key },
+    });
+    let output = '';
+    let settled = false;
+    const finish = (result) => { if (!settled) { settled = true; resolve(result); } };
+    const timeout = setTimeout(() => { child.kill(); finish({ ok: false, error: 'Provider request timed out.' }); }, 25000);
+    child.stdout.on('data', (chunk) => { output += String(chunk).slice(0, 32768); });
+    child.on('error', () => { clearTimeout(timeout); finish({ ok: false, error: 'Could not start provider setup check.' }); });
+    child.on('close', () => {
+      clearTimeout(timeout);
+      try {
+        const result = JSON.parse(output.trim().split(/\r?\n/).at(-1));
+        if (!result || typeof result !== 'object' || result.ok !== true) return finish({ ok: false, error: 'Provider request failed. Check the URL, key, model, and provider compatibility.' });
+        finish(result);
+      } catch { finish({ ok: false, error: 'Provider returned an invalid setup response.' }); }
+    });
+  });
+}
 
 function createWindow() {
   mainWindow = createMainWindow({
@@ -100,9 +131,10 @@ app.on('before-quit', () => {
   }
 });
 
-registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager, state: processingState, repoRoot, sendWorkerEvent, getMainWindow: () => mainWindow });
+registerProcessingIpc({ ipcMain, app, dialog, fs, safeStorage, workerManager, state: processingState, repoRoot, sendWorkerEvent, getMainWindow: () => mainWindow });
 
 registerProjectIpc({ ipcMain, app, workerManager });
+registerSettingsIpc({ ipcMain, app, safeStorage, spawnSetup });
 
 // In this file you can include the rest of your app's specific main process
 // code. You can also put them in separate files and import them here.

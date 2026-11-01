@@ -212,6 +212,8 @@ test('an adaptive run carries sampling bounds and settles stopped', async (t) =>
   }
   const start = s.getStart();
   assert.ok(start.argv.includes('--adaptive'));
+  assert.equal(start.argv.includes('test-dummy-key'), false);
+  assert.equal(start.env?.BASETEN_API_KEY, 'test-dummy-key');
   const flagAt = start.argv.indexOf('--adaptive-max-frames');
   assert.notEqual(flagAt, -1);
   assert.equal(start.argv[flagAt + 1], '5');

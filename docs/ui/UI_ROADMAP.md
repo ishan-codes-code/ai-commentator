@@ -95,12 +95,20 @@ otherwise.
   review, packaged-build (`npm run package` + smoke) verification.
 - Acceptance: packaged app renders the shell; worker lifecycle intact.
 
+## Stage 4 — Configuration and first-launch setup (M5)
+
+- Depends on: Stage 0 shell and the Electron/Python worker integration.
+- Settings owns provider, game, and commentary preferences and reuses one
+  persistence/IPC surface for first launch and later edits.
+- Key input is write-only; only credential metadata returns to the renderer.
+- Acceptance: provider checks distinguish discovered from image-verified
+  models; incomplete setup leaves offline extraction available; saved prompt
+  preferences cannot disable schema or factuality validation.
+
 ## Explicit exclusions (all stages above)
 
-- No changes to the Python engine, `python/worker.py`, the NDJSON
-  worker protocol, `main.js`, `preload.js`, `worker-protocol.mjs`,
-  `python-worker.mjs`, Electron security settings, or the Muse model
-  identifier.
+- Worker configuration and settings IPC are approved M5 extensions; the
+  existing stdin stop protocol and Muse model default remain compatible.
 - No Zustand until local state demonstrably fails; no router until
   section count or deep-linking needs it.
 - No FastAPI, Docker, databases, or backend services.

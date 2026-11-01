@@ -35,6 +35,7 @@ from ..config import (
     SCRIPT_WORD_NUMBERS,
     SCRIPT_ZONE_STEMS,
     WRITER_MAX_EVIDENCE_CHARS,
+    stylistic_prompt_suffix,
 )
 from ..errors import ObservationError, WriterAPIError
 from ..events.detection import _feed_name_tokens, validate_events
@@ -105,7 +106,7 @@ def build_script_prompt(claims: list, history_texts: list) -> str:
     if history_texts:
         parts.append("Already said (do not repeat this information): ")
         parts.append(" | ".join(history_texts[-SCRIPT_MAX_HISTORY_LINES:]))
-    return "".join(parts)
+    return "".join(parts) + stylistic_prompt_suffix()
 
 
 def _script_norm(text: str) -> str:

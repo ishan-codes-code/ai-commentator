@@ -25,6 +25,7 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
   const [run, setRun] = useState(() => createInitialRunState());
   const [runMode, setRunMode] = useState(RUN_MODES.OFFLINE);
   const [visionConfigured, setVisionConfigured] = useState(false);
+  const [visionMissing, setVisionMissing] = useState('API key');
   const [visionChecked, setVisionChecked] = useState(false);
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -72,6 +73,7 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
             if (alive && status && status.ok === true) {
               const configured = status.configured === true;
               setVisionConfigured(configured);
+              setVisionMissing(status.missing ?? null);
               setRunMode(defaultRunMode(configured));
             }
           } catch {
@@ -278,6 +280,7 @@ export default function WorkspaceSection({ projectId, inspectorOpen, onProjectLo
       runMode={runMode}
       setRunMode={setRunMode}
       visionConfigured={visionConfigured}
+      visionMissing={visionMissing}
       visionChecked={visionChecked}
       canStart={canStart}
       starting={starting}

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import AppLayout from "@/layout/AppLayout.jsx";
 import AppHeader from "@/layout/AppHeader.jsx";
@@ -35,6 +35,14 @@ export default function App() {
   const [projectName, setProjectName] = useState(null);
   const [navigationCollapsed, setNavigationCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    window.api?.loadSettings?.().then((result) => {
+      if (alive && result?.ok && !result.settings?.onboardingCompleted) setActiveSection("settings");
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const inWorkspace = workspaceId !== null;
   const SectionView = SECTION_VIEWS[activeSection] ?? DashboardSection;

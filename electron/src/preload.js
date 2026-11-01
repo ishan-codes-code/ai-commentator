@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('api', {
   cancelProcessing: () => ipcRenderer.invoke('cancel-processing'),
   requestStop: () => ipcRenderer.invoke('request-stop'),
   visionStatus: () => ipcRenderer.invoke('vision-status'),
+  loadSettings: () => ipcRenderer.invoke('settings-load'),
+  saveSettings: (settings) => ipcRenderer.invoke('settings-save', settings),
+  setProviderKey: (key) => ipcRenderer.invoke('credential-set', key),
+  deleteProviderKey: () => ipcRenderer.invoke('credential-delete'),
+  providerSetup: (operation, settings) => ipcRenderer.invoke('provider-setup', operation, settings),
   selectVideo: () => ipcRenderer.invoke('select-video'),
   listProjects: () => ipcRenderer.invoke('list-projects'),
   createProject: (name, sourcePath) =>

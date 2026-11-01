@@ -30,6 +30,31 @@ signal-free and covered).
 
 ## Commentary Studio UI foundation
 
+The renderer's existing Settings navigation now contains provider, game, and
+commentary setup backed by a single global `settings.json` in Electron
+`userData`. Settings are validated and atomically replaced; API credentials
+are stored separately as Electron `safeStorage` ciphertext. The renderer only
+receives key-presence and secure-storage-availability booleans. First launch
+routes to Settings until setup is marked complete; optional setup can be
+skipped, and the same page remains available from navigation.
+
+The first provider is OpenAI-compatible, defaulting to the existing Baseten
+URL and Muse model ID. A separate Python setup command tests the connection,
+lists models (all explicitly marked unverified), and verifies image input
+with an explicit small-image request. Only selected models manually verified
+for image input are accepted for paid runs using the stored key. Provider
+configuration and bounded game/prompt preferences are passed to the Python
+worker through its child environment; the existing stdin stop protocol is
+unchanged. Style preferences are appended only to gated commentary/script
+prompts; the validated observation schema and deterministic claim/script
+validators remain authoritative.
+
+The provider setup check and model list have not been live-tested. The
+explicit image-capability check is user-triggered and may incur provider
+charges; test suites use fakes only. OS-backed secure storage is required for
+saved keys; there is no plaintext fallback. The legacy `BASETEN_API_KEY`
+process environment remains a compatibility path.
+
 The Electron renderer opens into a 900 × 650 windowed studio shell with a
 toggleable navigation sidebar and live worker-status header. An open project
 uses a bounded editor with independently toggleable processing/project
@@ -49,6 +74,35 @@ Configure, and Project information into fixed-header tabs with independently
 scrolling content; processing details remain driven by the worker view state.
 The UI palette is monochromatic with semantic status accents. Window size and
 lifecycle are unchanged. No Python engine or worker protocol behavior changed.
+
+## M5 Configuration & Setup
+
+The renderer's existing Settings navigation now contains provider, game, and
+commentary setup backed by a single global `settings.json` in Electron
+`userData`. Settings are validated and atomically replaced; API credentials
+are stored separately as Electron `safeStorage` ciphertext. The renderer only
+receives key-presence and secure-storage-availability booleans. First launch
+routes to Settings until setup is marked complete; optional setup can be
+skipped, and the same page remains available from navigation.
+
+The first provider is OpenAI-compatible, defaulting to the existing Baseten
+URL and Muse model ID. A separate Python setup command tests the connection,
+lists models (all explicitly marked unverified), and verifies image input
+with an explicit small-image request. Only selected models manually verified
+for image input are accepted for paid runs using the stored key. Provider
+configuration and bounded game/prompt preferences are passed to the Python
+worker through its child environment; the existing stdin stop protocol is
+unchanged. Style preferences guide model-worded commentary/script paths;
+schema validation and deterministic evidence/script validation remain
+authoritative.
+
+Python suite: 361 tests passed offline. The full Electron suite passed 104
+tests before the final schema-hardening/test additions; the latest focused
+settings and processing suites passed 18/18. A later full-suite rerun was
+interrupted. Renderer production build passed. Provider setup checks have not
+been live-tested. The explicit image-capability check is user-triggered and
+may incur provider charges. Secure-storage unavailability has no plaintext
+fallback. The legacy `BASETEN_API_KEY` process environment remains supported.
 
 ## Modularization status
 

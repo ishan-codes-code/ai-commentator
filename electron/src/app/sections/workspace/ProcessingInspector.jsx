@@ -174,7 +174,7 @@ function ProcessingContent({ project, run, canStart, starting, cancelling, cance
   );
 }
 
-function ConfigurationContent({ runMode, setRunMode, visionConfigured, visionChecked, canStart, adaptiveMaxFrames, setAdaptiveMaxFrames }) {
+function ConfigurationContent({ runMode, setRunMode, visionConfigured, visionMissing, visionChecked, canStart, adaptiveMaxFrames, setAdaptiveMaxFrames }) {
   const aiSelected = isAiMode(runMode);
   const adaptiveSelected = isAdaptiveMode(runMode);
   return (
@@ -264,7 +264,7 @@ function ConfigurationContent({ runMode, setRunMode, visionConfigured, visionChe
       <section className="flex min-w-0 flex-col gap-2" aria-labelledby="provider-status-title">
         <h2 id="provider-status-title" className="text-[11px] font-medium text-muted-foreground">AI availability</h2>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[12px] text-foreground">Provider credential</span>
+          <span className="text-[12px] text-foreground">AI readiness</span>
           <Badge variant={visionConfigured ? "secondary" : "outline"}>
             {visionChecked ? (visionConfigured ? "Configured" : "Not configured") : "Checking"}
           </Badge>
@@ -273,7 +273,7 @@ function ConfigurationContent({ runMode, setRunMode, visionConfigured, visionChe
           {visionConfigured
             ? "AI analysis is available for this workspace."
             : visionChecked
-              ? "AI analysis is disabled until the provider credential is configured and the application is restarted."
+              ? `AI analysis is disabled until ${visionMissing ?? 'provider configuration'} is ready. Configure it in Settings. Offline extraction remains available.`
               : "Checking whether AI analysis is available…"}
         </p>
       </section>
@@ -323,6 +323,7 @@ export default function ProcessingInspector({
   runMode,
   setRunMode,
   visionConfigured,
+  visionMissing,
   visionChecked,
   canStart,
   starting,
@@ -366,6 +367,7 @@ export default function ProcessingInspector({
           runMode={runMode}
           setRunMode={setRunMode}
           visionConfigured={visionConfigured}
+          visionMissing={visionMissing}
           visionChecked={visionChecked}
           canStart={canStart}
           adaptiveMaxFrames={adaptiveMaxFrames}

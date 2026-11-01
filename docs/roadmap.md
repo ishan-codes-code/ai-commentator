@@ -225,3 +225,16 @@ acceptance criteria, and what is explicitly out of scope.
   OBS, database, FastAPI.
 - **Status:** complete. Next: renderer video-selection UI on the existing
   `processVideo`/`cancelProcessing`/`onWorkerEvent` API, then milestone 9.
+
+## M5. Configuration & Setup
+
+- **Goal:** user-managed OpenAI-compatible provider credentials and model,
+  Free Fire context, commentary style, and first-launch setup.
+- **Dependencies:** native Electron/Python integration (milestone 11).
+- **Status:** implementation underway. The current source adds validated
+  global settings persistence, Electron `safeStorage` credential handling,
+  provider connection/model/image checks, child-environment configuration,
+  Settings UI, and onboarding. See `docs/current-state.md` for verified
+  implementation and test status.
+- **Out of scope:** multiple active providers, accounts/sync, non-Free Fire
+  game integrations, and provider-specific APIs beyond the compatible API.

@@ -23,6 +23,13 @@ and the tests together.
   **stderr** carries diagnostics (Electron forwards); **stdin** carries
   only control messages (Electron writes, the worker reads). The process
   manager owns stdin writes; the renderer never touches the child.
+- The main process supplies the child's provider endpoint/model and prompt
+  preferences through `BASETEN_BASE_URL`, `BASETEN_MODEL`, and
+  `AI_COMMENTATOR_SETTINGS_JSON`. For a saved credential, it decrypts the
+  OS-backed credential immediately before spawning and passes it as
+  `BASETEN_API_KEY` only in the child environment. It is never an argument,
+  worker message, or renderer value. The legacy host environment key remains
+  supported for existing development setups.
 - **Control messages** are one newline-delimited JSON object per line:
   `{"type":"stop","version":1}` is version 1's only command, built by
   `buildStopControlLine()` and parsed by

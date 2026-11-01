@@ -1,7 +1,9 @@
+import path from 'node:path';
 import { getProjectOutputDir, getProject as getStoredProject, settleProjectRun as settleStoredRun } from '../../project-store.mjs';
 import { buildWorkerArgv, isVisionConfigured, resolvePythonExecutable, resolveWorkerScript, validateVideoInput } from '../../worker-protocol.mjs';
+import { loadSettings } from '../../settings-store.mjs';
 
-export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager, state, repoRoot, sendWorkerEvent, getMainWindow }) {
+export function registerProcessingIpc({ ipcMain, app, dialog, fs, safeStorage, workerManager, state, repoRoot, sendWorkerEvent, getMainWindow }) {
   // True once the active run emitted its terminal `stopped` message.
   // Reset on every start; runs never overlap, so one flag is enough.
   let stoppedSeenForActiveRun = false;
@@ -74,12 +76,15 @@ export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager,
     // AI analysis is a paid run: refuse to spawn without a key rather
     // than silently falling back to offline mode. The worker also
     // fails fast, but this stops the job before any extraction work.
-    if (!opts.skipVision && !isVisionConfigured()) {
+    let userSettings;
+    try { userSettings = loadSettings(app.getPath('userData')); } catch { userSettings = null; }
+    const hasStoredCredential = (() => { try { return fs.existsSync(path.join(app.getPath('userData'), 'provider-key.enc')); } catch { return false; } })();
+    const legacyCredential = typeof process.env.BASETEN_API_KEY === 'string' ? process.env.BASETEN_API_KEY : '';
+    const paidRequested = !opts.skipVision || opts.withScript || opts.adaptive;
+    if (paidRequested && !hasStoredCredential && !legacyCredential) {
       return {
         ok: false,
-        error:
-          'AI analysis needs a Baseten API key. Set BASETEN_API_KEY in ' +
-          'the environment and restart the app, or use offline extraction.',
+        error: 'AI analysis needs an API key. Open Settings to configure a provider, or choose offline extraction.',
       };
     }
     let argv;
@@ -89,9 +94,32 @@ export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager,
       return { ok: false, error: err?.message ?? 'Invalid run options.' };
     }
     stoppedSeenForActiveRun = false;
+    let credential = '';
+    try {
+      if (hasStoredCredential && safeStorage?.isEncryptionAvailable?.()) {
+        credential = safeStorage.decryptString(fs.readFileSync(path.join(app.getPath('userData'), 'provider-key.enc')));
+      }
+    } catch { credential = ''; }
+    if (!credential) credential = legacyCredential;
+    if (paidRequested && !credential) {
+      return { ok: false, error: 'Secure API credential is unavailable. Check Settings and secure storage.' };
+    }
+    if (paidRequested && hasStoredCredential && userSettings && !userSettings.provider.modelVisionVerified) {
+      return { ok: false, error: 'The selected model has not been verified for image input. Open Settings and run Verify image support.' };
+    }
+    const workerEnv = { ...process.env };
+    delete workerEnv.BASETEN_API_KEY;
+    delete workerEnv.AI_COMMENTATOR_PROVIDER_API_KEY;
+    if (credential) workerEnv.BASETEN_API_KEY = credential;
+    if (userSettings) {
+      workerEnv.BASETEN_BASE_URL = userSettings.provider.baseUrl;
+      workerEnv.BASETEN_MODEL = userSettings.provider.model;
+      workerEnv.AI_COMMENTATOR_SETTINGS_JSON = JSON.stringify(userSettings);
+    }
     const startedJob = workerManager.start({
       executable,
       argv,
+      env: workerEnv,
       onMessage: (message) => {
         if (message && message.type === 'stopped') {
           stoppedSeenForActiveRun = true;
@@ -138,9 +166,14 @@ export function registerProcessingIpc({ ipcMain, app, dialog, fs, workerManager,
   });
   
   ipcMain.handle('vision-status', async () => {
-    // Boolean only: the key value never crosses IPC.
+    // Safe readiness metadata only: credential bytes never cross IPC.
     try {
-      return { ok: true, configured: isVisionConfigured() };
+      const stored = fs.existsSync(path.join(app.getPath('userData'), 'provider-key.enc'));
+      const current = loadSettings(app.getPath('userData'));
+      const keyConfigured = stored || isVisionConfigured();
+      const secureReady = !stored || (safeStorage?.isEncryptionAvailable?.() === true && current.provider.modelVisionVerified);
+      const ready = keyConfigured && secureReady;
+      return { ok: true, configured: ready, ready, keyConfigured, missing: !keyConfigured ? 'API key' : stored && safeStorage?.isEncryptionAvailable?.() !== true ? 'secure storage' : stored && !current.provider.modelVisionVerified ? 'verified vision model' : null };
     } catch {
       return { ok: true, configured: false };
     }

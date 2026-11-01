@@ -24,6 +24,9 @@ see [../architecture.md](../architecture.md) and
 - `electron/src/app/sections/WorkspaceSection.jsx` — project loading,
   project-bound processing and its single worker subscription; it composes
   the workspace regions.
+- `electron/src/app/sections/SettingsSection.jsx` — provider, game, prompt,
+  and first-launch setup. Credential entry is write-only; only safe key
+  metadata reaches this renderer section.
 - `electron/src/components/RunPanel.jsx` — presentational run states
   driven by `lib/worker-view.js`.
 - `electron/src/components/WorkerStatus.jsx` — dashboard worker status;

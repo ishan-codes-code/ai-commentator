@@ -28,6 +28,7 @@ function createWorkerManager({ spawnFn = spawn } = {}) {
     start({
       executable,
       argv = [],
+      env,
       onMessage,
       onStderr,
       onExit,
@@ -41,7 +42,7 @@ function createWorkerManager({ spawnFn = spawn } = {}) {
       const record = { cancelled: false, killTimer: null, stopRequested: false };
       let child;
       try {
-        child = spawnFn(executable, argv, { stdio: ['pipe', 'pipe', 'pipe'] });
+        child = spawnFn(executable, argv, { stdio: ['pipe', 'pipe', 'pipe'], ...(env ? { env } : {}) });
       } catch (err) {
         if (typeof onExit === 'function') {
           onExit({ code: null, signal: null, cancelled: false, spawnError: err });
